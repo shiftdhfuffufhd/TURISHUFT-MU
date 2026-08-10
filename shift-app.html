@@ -1615,15 +1615,16 @@ function pickForSlot(pool, slot, need, monthCounts, alreadyChosenIds, restBonusS
   const deptGroups = deptRulesFor(slot.id);
   const alreadyDepts = alreadyChosenIds.flatMap(id=>{ const e=state.employees.find(x=>x.id===id); return (e&&e.departments)||[]; });
   const restRank = (e)=> (restBonusSet && restBonusSet.has(e.id)) ? 1 : 0;
-  // 希望シフトの選択肢が少ない人(他に回してもらえる枠が少ない人)ほど、同じ希望順位の中で優先する
+  // 希望シフトの選択肢が少ない人(他に回してもらえる枠が少ない人)は、
+  // 公平性(勤務日数・時間)が同点の場合のみ優先する(公平性より優先させると、選択肢が少ないだけの人に独占されてしまうため)
   const optionCount = (e)=> Object.keys(e.shiftRank||{}).length || 99;
   const cmp = (a,b)=>
     (a.shiftRank[slot.id]||99)-(b.shiftRank[slot.id]||99)
-    || optionCount(a)-optionCount(b)
     || restRank(a)-restRank(b)
     || ((streak&&streak[a.id])||0)-((streak&&streak[b.id])||0)
     || ((monthHours&&monthHours[a.id])||0)-((monthHours&&monthHours[b.id])||0)
-    || monthCounts[a.id]-monthCounts[b.id];
+    || monthCounts[a.id]-monthCounts[b.id]
+    || optionCount(a)-optionCount(b);
   let chosen = [];
   deptGroups.filter(group=> !group.some(d=>alreadyDepts.includes(d))).forEach(group=>{
     if(chosen.length>=need) return;
@@ -2087,7 +2088,7 @@ function viewShift(){
     <div class="card">${monthSwitchHtml()}</div>
     <div class="card">
       <h2><span class="num">①</span>社員の大枠を自動仮作成</h2>
-      <p class="desc">「必要な人数だけを配置し、出勤可能でも必要人数を満たしていれば追加配置しない」方針で仮配置します(あくまで仮案)。部門・希望休(可能な限り)・予定(会議など)・勤務可能曜日/シフト・シフト適正順位・ナイトローテーションを考慮します。<b>最大連勤日数は5日で、要出勤・ナイト・人員不足など、いかなる理由があっても6連勤以上は作成しません。</b>勤務間隔は14時間以上を確保します。対応できる候補者が少ない枠(早番など)ほど優先して先に埋め、候補者が多い枠に人を取られて希少な枠が埋まらなくなるのを防ぎます。同じ希望順位の候補が複数いる場合は、希望シフトの選択肢が少ない人(他に回してもらえる枠が少ない人)を優先し、特定の人だけ休みが極端に多くなるのを防ぎます。まだ不足している枠があれば、休みに余裕がある人(下限より多く休んでいる人)を優先して埋めます(必要人数を超えては配置しません)。それでも5連勤以内・条件を満たす候補がいない場合は、無理に埋めず人員不足として表示します。休み日数の下限は「下回らない」ことだけを保証します(休みは異常ではなく正常な状態として扱います)。PAの割り当てには影響しません。再作成時は上書き確認が出ます。従業員を追加・削除した後にもう一度押せば、その内容を反映して作り直せます。</p>
+      <p class="desc">「必要な人数だけを配置し、出勤可能でも必要人数を満たしていれば追加配置しない」方針で仮配置します(あくまで仮案)。部門・希望休(可能な限り)・予定(会議など)・勤務可能曜日/シフト・シフト適正順位・ナイトローテーションを考慮します。<b>最大連勤日数は5日で、要出勤・ナイト・人員不足など、いかなる理由があっても6連勤以上は作成しません。</b>勤務間隔は14時間以上を確保します。対応できる候補者が少ない枠(早番など)ほど優先して先に埋め、候補者が多い枠に人を取られて希少な枠が埋まらなくなるのを防ぎます。同じ希望順位の候補が複数いる場合は、まず勤務日数・時間の公平性を優先し、それでも並んだ場合にのみ希望シフトの選択肢が少ない人を優先します。まだ不足している枠があれば、休みに余裕がある人(下限より多く休んでいる人)を優先して埋めます(必要人数を超えては配置しません)。それでも5連勤以内・条件を満たす候補がいない場合は、無理に埋めず人員不足として表示します。休み日数の下限は「下回らない」ことだけを保証します(休みは異常ではなく正常な状態として扱います)。PAの割り当てには影響しません。再作成時は上書き確認が出ます。従業員を追加・削除した後にもう一度押せば、その内容を反映して作り直せます。</p>
       <button class="btn btn-navy btn-block" onclick="autoGenerateStaff()">社員シフトを仮作成する</button>
     </div>
     ${nightRotationHtml()}
