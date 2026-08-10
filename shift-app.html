@@ -87,6 +87,8 @@
   table.needTable th, table.needTable td{ border:1px solid var(--line); text-align:center; padding:6px 4px; }
   table.needTable th{ background:#eef1ea; font-weight:700; font-size:11px; }
   table.needTable td.rowHead{ text-align:left; padding-left:8px; background:#fcfbf8; font-weight:700; }
+  table.needTable tr.bulkRow td{ background:#eef1ea; }
+  table.needTable tr.bulkRow td.rowHead{ background:#e3e8dc; }
   .dayNumInput{ width:44px; text-align:center; padding:6px 2px; border-radius:6px; border:1px solid var(--line);
     font-family:'IBM Plex Mono', monospace; font-size:13px; }
 
@@ -282,11 +284,15 @@ function slotWithinRange(slot, rangeStart, rangeEnd){
 }
 function normHour(hhmm){ const [h,m]=hhmm.split(':').map(Number); const hh = h<4? h+24 : h; return hh + m/60; }
 function computeWeekKeysOfMonth(ym){ return [...new Set(buildMonthDates(ym).map(mondayOf))]; }
-function nonNightSlots(){ return state.shiftSlots.filter(s=>s.id!=='night'); }
+function sortSlotsByTime(arr){ return arr.slice().sort((a,b)=> normHour(a.start)-normHour(b.start)); }
+function nonNightSlots(){ return sortSlotsByTime(state.shiftSlots.filter(s=>s.id!=='night')); }
 function nightSlot(){ return state.shiftSlots.find(s=>s.id==='night') || null; }
-function visibleSlots(){ return state.nightShiftEnabled ? state.shiftSlots : nonNightSlots(); }
+function visibleSlots(){
+  const slots = state.nightShiftEnabled ? state.shiftSlots : state.shiftSlots.filter(s=>s.id!=='night');
+  return sortSlotsByTime(slots);
+}
 
-// ---------- 社員の希望休・予定(会議/半休など) ----------
+// ---------- 社員の希望休・予定(会議など) ----------
 function getDayStatus(empId, dateStr){
   const rec = state.monthData.availability[empId];
   const base = {available:false, offRequested:false, slots:[], rangeStart:'', rangeEnd:'', specialEntry:null};
@@ -304,6 +310,12 @@ function timesOverlap(aStart, aEnd, bStart, bEnd){
   let as=normHour(aStart), ae=normHour(aEnd); if(ae<=as) ae+=24;
   let bs=normHour(bStart), be=normHour(bEnd); if(be<=bs) be+=24;
   return Math.min(ae,be) - Math.max(as,bs) > 0;
+}
+// slotがspStart〜spEndの時間帯を完全に含んでいるか判定(翌日終了にも対応)
+function slotFullyCovers(slot, spStart, spEnd){
+  let ss=normHour(slot.start), se=normHour(slot.end); if(se<=ss) se+=24;
+  let as=normHour(spStart), ae=normHour(spEnd); if(ae<=as) ae+=24;
+  return ss<=as && se>=ae;
 }
 
 // ---------- PA基本パターン ----------
@@ -540,12 +552,8 @@ function viewEmployees(){
         <div class="dayChecks" id="newEmpDays">
           ${DAYS.map(d=>`<div class="dayChip on" data-day="${d.key}" onclick="toggleNewEmpDay('${d.key}')">${d.label}</div>`).join('')}
         </div>
-        <label>シフト適正順位(第1〜第3希望・任意。選ばなかったシフトは「不可」扱い)</label>
-        <div class="row">
-          <div><label>第1希望</label><select id="newEmpPref1"><option value="">なし</option>${slotOptions}</select></div>
-          <div><label>第2希望</label><select id="newEmpPref2"><option value="">なし</option>${slotOptions}</select></div>
-          <div><label>第3希望</label><select id="newEmpPref3"><option value="">なし</option>${slotOptions}</select></div>
-        </div>
+        <label>シフト適正順位(第1〜第5希望・任意。選ばなかったシフトは「不可」扱い)</label>
+        ${prefSelectsHtml('newEmpPref', ['','','','',''])}
         ${state.nightShiftEnabled ? `<label class="checkRow"><input type="checkbox" id="newEmpNightOk"> ナイト勤務可能</label>` : ''}
         <label>週の勤務日数(目安・任意)</label>
         <input type="number" id="newEmpMax" placeholder="5">
@@ -570,12 +578,8 @@ function viewEmployees(){
           <div><label>週の出勤日数目安(任意)</label><input type="number" id="newEmpMaxPa" placeholder="3"></div>
         </div>
         <div id="newPaRegularFields" style="display:none;">
-          <label>勤務可能シフト・適正順位(第1〜第3希望)</label>
-          <div class="row">
-            <div><label>第1希望</label><select id="newPaPref1"><option value="">なし</option>${slotOptions}</select></div>
-            <div><label>第2希望</label><select id="newPaPref2"><option value="">なし</option>${slotOptions}</select></div>
-            <div><label>第3希望</label><select id="newPaPref3"><option value="">なし</option>${slotOptions}</select></div>
-          </div>
+          <label>勤務可能シフト・適正順位(第1〜第5希望)</label>
+          ${prefSelectsHtml('newPaPref', ['','','','',''])}
           ${state.nightShiftEnabled ? `
           <label class="checkRow"><input type="checkbox" id="newPaNightOk"> ナイト勤務可能</label>
           <label class="checkRow"><input type="checkbox" id="newPaNightSpecialist"> ナイト専門</label>
@@ -612,9 +616,34 @@ function toggleNewEmpDay(key){
   const el = document.querySelector(`#newEmpDays .dayChip[data-day="${key}"]`);
   if(el) el.classList.toggle('on');
 }
-function buildShiftRankFromSelects(p1,p2,p3){
-  const rank = {}; [p1,p2,p3].forEach((slotId,i)=>{ if(slotId) rank[slotId]=i+1; });
+const PREF_LEVELS = 5;
+function buildShiftRankFromValues(vals){
+  const rank = {}; const cleaned = [];
+  vals.forEach(v=>{ if(v && !cleaned.includes(v)) cleaned.push(v); });
+  cleaned.forEach((v,i)=> rank[v]=i+1);
   return rank;
+}
+function buildShiftRankFromSelects(p1,p2,p3){ return buildShiftRankFromValues([p1,p2,p3]); }
+function getRankedArray(e, n){
+  const sorted = Object.keys(e.shiftRank||{}).sort((a,b)=> e.shiftRank[a]-e.shiftRank[b]);
+  const arr = []; for(let i=0;i<n;i++) arr.push(sorted[i]||'');
+  return arr;
+}
+// 第1〜第5希望のselectをまとめて生成する。idPrefixに続けて1〜5の番号をidにする。
+// changeHandler省略時は新規登録フォーム用(送信時にまとめて読み取る)。
+function prefSelectsHtml(idPrefix, ranked, changeHandler){
+  const opts = (val)=> nonNightSlots().map(s=>`<option value="${s.id}" ${val===s.id?'selected':''}>${escapeHtml(s.name)}</option>`).join('');
+  return `<div class="row" style="flex-wrap:wrap;">
+    ${ranked.map((val,i)=>`<div style="flex:1 1 30%;min-width:90px;"><label>第${i+1}希望</label>
+      <select id="${idPrefix}${i+1}" ${changeHandler?`onchange="${changeHandler}"`:''}><option value="">なし</option>${opts(val)}</select></div>`).join('')}
+  </div>`;
+}
+async function updateStaffPrefsFromDom(empId, idPrefix){
+  const e = state.employees.find(x=>x.id===empId); if(!e) return;
+  const vals = []; for(let i=1;i<=PREF_LEVELS;i++) vals.push(document.getElementById(idPrefix+i)?.value || '');
+  const rank = buildShiftRankFromValues(vals);
+  e.shiftRank = rank; e.workableShifts = Object.keys(rank);
+  await saveSettings(); render();
 }
 function renderPaPatternRow(scope, dayKey, entry, empId){
   const changeType = scope==='new' ? `setNewPaPatternType('${dayKey}', this.value)` : `updatePaPatternType('${empId}','${dayKey}', this.value)`;
@@ -661,8 +690,8 @@ async function addEmployee(){
   const type = document.getElementById('newEmpType').value;
   let emp;
   if(type==='staff'){
-    const p1=document.getElementById('newEmpPref1').value, p2=document.getElementById('newEmpPref2').value, p3=document.getElementById('newEmpPref3').value;
-    const shiftRank = buildShiftRankFromSelects(p1,p2,p3);
+    const prefVals = []; for(let i=1;i<=PREF_LEVELS;i++) prefVals.push(document.getElementById('newEmpPref'+i).value);
+    const shiftRank = buildShiftRankFromValues(prefVals);
     const max = document.getElementById('newEmpMax').value;
     const minOff = document.getElementById('newEmpMinOff').value;
     emp = { id:uid(), name, type, department: document.getElementById('newEmpDept').value,
@@ -677,8 +706,8 @@ async function addEmployee(){
     const dept = document.getElementById('newPaDept').value || null;
     let shiftRank = {}, workableShifts = [], nightOk=false, nightSpecialist=false;
     if(paType==='regular'){
-      const p1=document.getElementById('newPaPref1').value, p2=document.getElementById('newPaPref2').value, p3=document.getElementById('newPaPref3').value;
-      shiftRank = buildShiftRankFromSelects(p1,p2,p3);
+      const prefVals = []; for(let i=1;i<=PREF_LEVELS;i++) prefVals.push(document.getElementById('newPaPref'+i).value);
+      shiftRank = buildShiftRankFromValues(prefVals);
       workableShifts = Object.keys(shiftRank);
       nightOk = !!document.getElementById('newPaNightOk')?.checked;
       nightSpecialist = !!document.getElementById('newPaNightSpecialist')?.checked;
@@ -699,9 +728,7 @@ async function removeEmployee(id){
 }
 function toggleEmpEdit(id){ state.empEditOpen[id] = !state.empEditOpen[id]; render(); }
 function staffEditPanel(e){
-  const slotOptions = (selId)=> nonNightSlots().map(s=>`<option value="${s.id}" ${selId===s.id?'selected':''}>${escapeHtml(s.name)}</option>`).join('');
-  const ranked = Object.keys(e.shiftRank).sort((a,b)=> e.shiftRank[a]-e.shiftRank[b]);
-  const p1=ranked[0]||'', p2=ranked[1]||'', p3=ranked[2]||'';
+  const idPrefix = `pref_${e.id}_`;
   return `
     <div class="staffPanel">
       <div class="miniTitle">名前</div>
@@ -715,11 +742,7 @@ function staffEditPanel(e){
         ${DAYS.map(d=>`<div class="dayChip ${e.workableDays.includes(d.key)?'on':''}" onclick="toggleStaffDay('${e.id}','${d.key}')">${d.label}</div>`).join('')}
       </div>
       <div class="miniTitle">シフト適正順位(選ばなかったシフトは不可扱い)</div>
-      <div class="row">
-        <div><label>第1希望</label><select onchange="updateStaffPrefs('${e.id}', this.value, '${p2}', '${p3}')"><option value="">なし</option>${slotOptions(p1)}</select></div>
-        <div><label>第2希望</label><select onchange="updateStaffPrefs('${e.id}', '${p1}', this.value, '${p3}')"><option value="">なし</option>${slotOptions(p2)}</select></div>
-        <div><label>第3希望</label><select onchange="updateStaffPrefs('${e.id}', '${p1}', '${p2}', this.value)"><option value="">なし</option>${slotOptions(p3)}</select></div>
-      </div>
+      ${prefSelectsHtml(idPrefix, getRankedArray(e, PREF_LEVELS), `updateStaffPrefsFromDom('${e.id}','${idPrefix}')`)}
       ${state.nightShiftEnabled ? `<label class="checkRow"><input type="checkbox" ${e.nightOk?'checked':''} onchange="updateEmpField('${e.id}','nightOk',this.checked,'bool')"> ナイト勤務可能</label>` : ''}
       <label>週の勤務日数(目安)</label>
       <input type="number" value="${e.maxPerWeek??''}" onchange="updateEmpField('${e.id}','maxPerWeek',this.value,'num')">
@@ -731,9 +754,7 @@ function staffEditPanel(e){
     </div>`;
 }
 function paEditPanel(e){
-  const slotOptions = (selId)=> nonNightSlots().map(s=>`<option value="${s.id}" ${selId===s.id?'selected':''}>${escapeHtml(s.name)}</option>`).join('');
-  const ranked = Object.keys(e.shiftRank||{}).sort((a,b)=> e.shiftRank[a]-e.shiftRank[b]);
-  const p1=ranked[0]||'', p2=ranked[1]||'', p3=ranked[2]||'';
+  const idPrefix = `pref_${e.id}_`;
   return `
     <div class="staffPanel">
       <div class="miniTitle">名前</div>
@@ -750,11 +771,7 @@ function paEditPanel(e){
       </div>
       ${e.paType==='regular' ? `
         <div class="miniTitle">勤務可能シフト・適正順位</div>
-        <div class="row">
-          <div><label>第1希望</label><select onchange="updateStaffPrefs('${e.id}', this.value, '${p2}', '${p3}')"><option value="">なし</option>${slotOptions(p1)}</select></div>
-          <div><label>第2希望</label><select onchange="updateStaffPrefs('${e.id}', '${p1}', this.value, '${p3}')"><option value="">なし</option>${slotOptions(p2)}</select></div>
-          <div><label>第3希望</label><select onchange="updateStaffPrefs('${e.id}', '${p1}', '${p2}', this.value)"><option value="">なし</option>${slotOptions(p3)}</select></div>
-        </div>
+        ${prefSelectsHtml(idPrefix, getRankedArray(e, PREF_LEVELS), `updateStaffPrefsFromDom('${e.id}','${idPrefix}')`)}
         ${state.nightShiftEnabled ? `
         <label class="checkRow"><input type="checkbox" ${e.nightOk?'checked':''} onchange="updateEmpField('${e.id}','nightOk',this.checked,'bool')"> ナイト勤務可能</label>
         <label class="checkRow"><input type="checkbox" ${e.nightSpecialist?'checked':''} onchange="updateEmpField('${e.id}','nightSpecialist',this.checked,'bool')"> ナイト専門</label>
@@ -785,12 +802,6 @@ async function toggleStaffDay(empId, dayKey){
   const e = state.employees.find(x=>x.id===empId); if(!e) return;
   const idx = e.workableDays.indexOf(dayKey);
   if(idx===-1) e.workableDays.push(dayKey); else e.workableDays.splice(idx,1);
-  await saveSettings(); render();
-}
-async function updateStaffPrefs(empId, p1, p2, p3){
-  const e = state.employees.find(x=>x.id===empId); if(!e) return;
-  const rank = buildShiftRankFromSelects(p1,p2,p3);
-  e.shiftRank = rank; e.workableShifts = Object.keys(rank);
   await saveSettings(); render();
 }
 async function updateEmpField(empId, field, val, kind){
@@ -852,9 +863,10 @@ async function removeSlot(id){
 }
 
 // ---------- 必要人数 ----------
-function needTableHtml(dataObj, updateFnName){
+function needTableHtml(dataObj, updateFnName, bulkFnName){
   const slots = visibleSlots();
   const headerCells = slots.map(s=>`<th>${escapeHtml(s.name)}<br><span class="mono" style="font-size:9.5px;">${formatSlotTime(s)}</span></th>`).join('');
+  const bulkCells = slots.map(s=>`<td><input class="dayNumInput" type="number" min="0" placeholder="目安" onchange="${bulkFnName}('${s.id}', this.value)"></td>`).join('');
   const rows = DAYS.map(d=>{
     const cells = slots.map(s=>{
       const val = (dataObj[d.key] && dataObj[d.key][s.id]) || 0;
@@ -862,7 +874,8 @@ function needTableHtml(dataObj, updateFnName){
     }).join('');
     return `<tr><td class="rowHead">${d.label}</td>${cells}</tr>`;
   }).join('');
-  return `<div style="overflow-x:auto;"><table class="needTable"><thead><tr><th></th>${headerCells}</tr></thead><tbody>${rows}</tbody></table></div>`;
+  return `<div style="overflow-x:auto;"><table class="needTable"><thead><tr><th></th>${headerCells}</tr></thead>
+    <tbody><tr class="bulkRow"><td class="rowHead">一括設定</td>${bulkCells}</tr>${rows}</tbody></table></div>`;
 }
 function viewNeed(){
   if(state.shiftSlots.length === 0){
@@ -872,13 +885,13 @@ function viewNeed(){
   return `
     <div class="card">
       <h2><span class="num">必要人数(社員)</span>曜日 × 時間帯ごとの必須人数</h2>
-      <p class="desc">この人数を必ず満たすように、社員(+不足時はレギュラーPA)で大枠を自動仮作成します。</p>
-      ${needTableHtml(state.requiredStaff, 'updateNeed')}
+      <p class="desc">この人数を必ず満たすように、社員(+不足時はレギュラーPA)で大枠を自動仮作成します。「一括設定」に数値を入れると、その時間帯の全曜日に同じ値が反映されます。そのあと曜日ごとに調整してください。</p>
+      ${needTableHtml(state.requiredStaff, 'updateNeed', 'bulkFillNeed')}
     </div>
     <div class="card">
       <h2><span class="num">必要人数(PA)</span>曜日 × 時間帯ごとのPA必須人数</h2>
-      <p class="desc">この人数を目安に、出勤可能なPAを配置します。出勤可能なPA全員を一旦仮配置し、多すぎる場合は管理者が手動で調整する運用を想定しています。</p>
-      ${needTableHtml(state.paRequired, 'updatePaRequired')}
+      <p class="desc">この人数を目安に、出勤可能なPAを配置します。出勤可能なPA全員を一旦仮配置し、多すぎる場合は管理者が手動で調整する運用を想定しています。「一括設定」に数値を入れると全曜日に反映され、そのあと曜日ごとに調整できます。</p>
+      ${needTableHtml(state.paRequired, 'updatePaRequired', 'bulkFillPaRequired')}
     </div>`;
 }
 async function updateNeed(dayKey, slotId, val){
@@ -890,6 +903,16 @@ async function updatePaRequired(dayKey, slotId, val){
   if(!state.paRequired[dayKey]) state.paRequired[dayKey] = {};
   state.paRequired[dayKey][slotId] = Number(val) || 0;
   await saveSettings();
+}
+async function bulkFillNeed(slotId, val){
+  const num = Number(val) || 0;
+  DAYS.forEach(d=>{ if(!state.requiredStaff[d.key]) state.requiredStaff[d.key] = {}; state.requiredStaff[d.key][slotId] = num; });
+  await saveSettings(); render();
+}
+async function bulkFillPaRequired(slotId, val){
+  const num = Number(val) || 0;
+  DAYS.forEach(d=>{ if(!state.paRequired[d.key]) state.paRequired[d.key] = {}; state.paRequired[d.key][slotId] = num; });
+  await saveSettings(); render();
 }
 
 // ---------- 社員 希望休 ----------
@@ -925,7 +948,10 @@ async function updateStaffSpecial(empId, dateStr, field, val){
   const cur = st.specialEntry || {content:'', start:'', end:'', kind:'off'};
   const specialEntry = {...cur, [field]: val};
   setDayStatus(empId, dateStr, {specialEntry});
-  await saveMonth(); render();
+  await saveMonth();
+  // 開始・終了の時刻入力は、再描画するとiOSの時刻ピッカーが不安定になるため再描画しない
+  if(field==='start' || field==='end') return;
+  render();
 }
 async function clearStaffSpecial(empId, dateStr){
   setDayStatus(empId, dateStr, {specialEntry:null});
@@ -937,9 +963,9 @@ function staffSpecialPanelHtml(empId, dateStr){
   const kind = sp.kind || 'off';
   return `
     <div class="dayDetail">
-      <div class="ddTitle">${formatMD(dateStr)}(${weekdayLabelOfDate(dateStr)}) の予定(会議・半休など)</div>
+      <div class="ddTitle">${formatMD(dateStr)}(${weekdayLabelOfDate(dateStr)}) の予定(会議など)</div>
       <label>内容</label>
-      <input type="text" value="${escapeHtml(sp.content)}" placeholder="例: 会議、半休" onchange="updateStaffSpecial('${empId}','${dateStr}','content',this.value)">
+      <input type="text" value="${escapeHtml(sp.content)}" placeholder="例: 会議" onchange="updateStaffSpecial('${empId}','${dateStr}','content',this.value)">
       <div class="row" style="margin-top:8px;">
         <div><label>開始</label><input type="time" value="${sp.start}" onchange="updateStaffSpecial('${empId}','${dateStr}','start',this.value)"></div>
         <div><label>終了</label><input type="time" value="${sp.end}" onchange="updateStaffSpecial('${empId}','${dateStr}','end',this.value)"></div>
@@ -947,11 +973,11 @@ function staffSpecialPanelHtml(empId, dateStr){
       <label style="margin-top:8px;">種別</label>
       <div class="segToggle">
         <button class="${kind==='required'?'active':''}" onclick="updateStaffSpecial('${empId}','${dateStr}','kind','required')">要出勤</button>
-        <button class="${kind==='off'?'active':''}" onclick="updateStaffSpecial('${empId}','${dateStr}','kind','off')">非出勤(半休など)</button>
+        <button class="${kind==='off'?'active':''}" onclick="updateStaffSpecial('${empId}','${dateStr}','kind','off')">非店舗出勤</button>
       </div>
       <p class="desc" style="margin:6px 0 0;">
-        「要出勤」：この時間帯と重なるシフト枠に、自動仮作成で必ずこの社員を配置します。<br>
-        「非出勤」：この時間帯はシフトの必要人数の計算には使いません(配置候補から外れます)が、出勤日数にはカウントされます。
+        「要出勤」：この時間帯を全て含むシフト枠に、自動仮作成で必ずこの社員を配置します(時間の一部しかカバーできない枠には配置しません)。<br>
+        「非店舗出勤」：この時間帯はシフトの必要人数の計算には使いません(配置候補から外れます)が、出勤日数にはカウントされます。
       </p>
       ${sp.content ? `<button class="btn btn-ghost btn-sm" style="margin-top:8px;" onclick="clearStaffSpecial('${empId}','${dateStr}')">この予定を削除</button>` : ''}
     </div>`;
@@ -963,7 +989,7 @@ function viewStaffOff(){
       <button class="btn btn-ghost btn-block" onclick="goTab('employees')">従業員管理へ</button></div>`;
   }
   const header = `<div class="card">${monthSwitchHtml()}
-    <p class="desc" style="margin:10px 0 0;">曜日・シフトの条件は「従業員」タブで設定します。ここでは「希望休」と「会議・半休などの予定」を登録します。</p></div>`;
+    <p class="desc" style="margin:10px 0 0;">曜日・シフトの条件は「従業員」タブで設定します。ここでは「希望休」と「会議などの予定」を登録します。</p></div>`;
   const cards = staffList.map(e=>{
     const mode = state.empCalMode[e.id] || 'off';
     const selectedDate = state.empSelectedDate[e.id];
@@ -973,7 +999,7 @@ function viewStaffOff(){
       <div class="meta" style="font-size:11.5px;color:var(--sub);margin-top:2px;">${staffSummary(e)}</div>
       <div class="modeToggle">
         <button class="${mode==='off'?'active m-off':''}" onclick="setCalMode('${e.id}','off')">希望休を編集</button>
-        <button class="${mode==='special'?'active m-avail':''}" onclick="setCalMode('${e.id}','special')">予定(会議・半休)を編集</button>
+        <button class="${mode==='special'?'active m-avail':''}" onclick="setCalMode('${e.id}','special')">予定(会議など)を編集</button>
       </div>
       <div class="monthCal">${['月','火','水','木','金','土','日'].map(w=>`<div class="wd">${w}</div>`).join('')}${buildStaffCalCells(e.id)}</div>
       <div class="legend">
@@ -1111,7 +1137,7 @@ function empMonthDays(empId){
   Object.keys(shifts).forEach(dateStr=>{
     if(Object.values(shifts[dateStr]).some(arr=>(arr||[]).includes(empId))) dateSet.add(dateStr);
   });
-  // 非出勤(半休など)の予定がある日も出勤日数としてカウントする
+  // 非店舗出勤の予定がある日も出勤日数としてカウントする
   const dates = buildMonthDates(state.month);
   dates.forEach(dateStr=>{
     const st = getDayStatus(empId, dateStr);
@@ -1130,7 +1156,7 @@ function isStaffCompatible(staffEmp, dateStr, slot){
   if(st.offRequested) return false;
   const sp = st.specialEntry;
   if(sp && sp.content && sp.start && sp.end && timesOverlap(slot.start, slot.end, sp.start, sp.end)){
-    // 非出勤(半休など)の予定と重なる枠には通常の自動配置では入れない。要出勤は別途強制配置するのでここでは素通り。
+    // 非店舗出勤の予定と重なる枠には通常の自動配置では入れない。要出勤は別途強制配置するのでここでは素通り。
     if((sp.kind||'off') === 'off') return false;
   }
   return true;
@@ -1237,6 +1263,20 @@ function computeDeptWarningsList(){
   });
   return list;
 }
+function computeUnmatchedRequiredEntries(){
+  const dates = buildMonthDates(state.month);
+  const list = [];
+  dates.forEach(dateStr=>{
+    state.employees.filter(e=>e.type==='staff').forEach(e=>{
+      const st = getDayStatus(e.id, dateStr);
+      const sp = st.specialEntry;
+      if(!(sp && sp.content && sp.start && sp.end && (sp.kind||'off')==='required')) return;
+      const matched = state.shiftSlots.some(slot=> slotFullyCovers(slot, sp.start, sp.end));
+      if(!matched) list.push({dateStr, emp:e, sp});
+    });
+  });
+  return list;
+}
 
 async function toggleAssign(empId, dateStr, slotId){
   if(!state.monthData.shifts[dateStr]) state.monthData.shifts[dateStr] = {};
@@ -1334,14 +1374,14 @@ async function autoGenerateStaff(){
     });
     const usedToday = new Set(Object.values(daySh).flat());
 
-    // 要出勤の予定がある社員を、時間が重なる枠へ最優先で強制配置する
+    // 要出勤の予定がある社員を、時間帯を完全にカバーする枠へ最優先で強制配置する
     staffList.forEach(e=>{
       if(usedToday.has(e.id)) return;
       const st = getDayStatus(e.id, dateStr);
       const sp = st.specialEntry;
       if(!(sp && sp.content && sp.start && sp.end && (sp.kind||'off')==='required')) return;
-      const matchSlot = state.shiftSlots.find(slot=> timesOverlap(slot.start, slot.end, sp.start, sp.end));
-      if(!matchSlot) return;
+      const matchSlot = state.shiftSlots.find(slot=> slotFullyCovers(slot, sp.start, sp.end));
+      if(!matchSlot) return; // 完全にカバーする枠がない場合は自動配置しない(不足として警告表示)
       if(!daySh[matchSlot.id]) daySh[matchSlot.id] = [];
       daySh[matchSlot.id].push(e.id);
       usedToday.add(e.id); monthCounts[e.id] = (monthCounts[e.id]||0)+1;
@@ -1532,6 +1572,14 @@ function viewShift(){
       ${deptWarnings.map(w=>`<div class="deptWarnItem">${formatSlashDate(w.dateStr)} ${escapeHtml(w.slot.name)}：${w.dept}担当不足</div>`).join('')}
     </div>` : '';
 
+  const unmatchedRequired = computeUnmatchedRequiredEntries();
+  const unmatchedHtml = unmatchedRequired.length ? `
+    <div class="card shortCard">
+      <h2 style="color:#8a2c22;"><span class="num" style="background:#f3c9c4;color:#8a2c22;">要出勤</span>時間帯を全てカバーする枠がありません</h2>
+      <p class="desc">下記の「要出勤」の予定は、その時間を完全に含む勤務時間帯が無いため自動配置されていません。時間帯を調整するか、手動で対応してください。</p>
+      ${unmatchedRequired.map(w=>`<div class="shortItem">${formatSlashDate(w.dateStr)} ${escapeHtml(w.emp.name)}：${escapeHtml(w.sp.content)} ${w.sp.start}〜${w.sp.end}</div>`).join('')}
+    </div>` : '';
+
   const dates = buildMonthDates(state.month);
   const filter = state.shiftViewFilter;
 
@@ -1613,7 +1661,7 @@ function viewShift(){
     <div class="card">${monthSwitchHtml()}</div>
     <div class="card">
       <h2><span class="num">①②</span>社員+レギュラーPAで大枠を自動仮作成</h2>
-      <p class="desc">部門・希望休・予定(会議/半休)・勤務可能曜日/シフト・シフト適正順位・ナイトローテーションを、社員→レギュラーPAの優先順で考慮して仮配置します(あくまで仮案)。通常PAの割り当てには影響しません。再作成時は上書き確認が出ます。</p>
+      <p class="desc">部門・希望休・予定(会議など)・勤務可能曜日/シフト・シフト適正順位・ナイトローテーションを、社員→レギュラーPAの優先順で考慮して仮配置します(あくまで仮案)。通常PAの割り当てには影響しません。再作成時は上書き確認が出ます。</p>
       <button class="btn btn-navy btn-block" onclick="autoGenerateStaff()">大枠を仮作成する</button>
     </div>
     ${nightRotationHtml()}
@@ -1626,6 +1674,7 @@ function viewShift(){
     ${paShortHtml}
     ${paExcessHtml}
     ${deptHtml}
+    ${unmatchedHtml}
     <div class="card">
       <h2><span class="num">④〜⑦</span>最終確認・手動調整</h2>
       <p class="desc">名前をタップすると割り当て/解除を切り替えられます。変更するたびに必要人数・不足・部門・勤務時間は自動再計算されます。</p>
