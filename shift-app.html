@@ -1241,33 +1241,81 @@ async function setNightRotation(weekKey, empId){
   state.monthData.nightRotation[weekKey] = empId;
   await saveMonth(); render();
 }
-function nightPersonForDate(dateStr, monthCounts){
+function nightPersonForDate(dateStr, monthCounts, streak, relaxConsecutive){
   const wk = mondayOf(dateStr);
   const nSlot = nightSlot(); if(!nSlot) return null;
   const withinDaysOffLimit = (e)=> !e.monthMinDaysOff || !monthCounts || (monthCounts[e.id]||0) < (daysInMonth(state.month) - e.monthMinDaysOff);
+  const withinStreak = (e)=> relaxConsecutive || !streak || (streak[e.id]||0) < 6;
   const primaryId = (state.monthData.nightRotation||{})[wk];
   const primary = state.employees.find(e=>e.id===primaryId);
-  if(primary && isStaffCompatible(primary, dateStr, nSlot) && withinDaysOffLimit(primary)) return primary;
+  if(primary && isStaffCompatible(primary, dateStr, nSlot) && withinDaysOffLimit(primary) && withinStreak(primary)) return primary;
   const altStaff = state.employees.filter(e=>e.type==='staff' && e.nightOk && e.id!==primaryId)
-    .find(e=> isStaffCompatible(e, dateStr, nSlot) && withinDaysOffLimit(e));
+    .find(e=> isStaffCompatible(e, dateStr, nSlot) && withinDaysOffLimit(e) && withinStreak(e));
   return altStaff || null;
 }
+function addDaysToDateStr(dateStr, n){
+  const d = new Date(dateStr+'T00:00:00');
+  d.setDate(d.getDate()+n);
+  return d.toISOString().slice(0,10);
+}
+function consecutiveWorkedBefore(empId, dateStr){
+  let count = 0;
+  for(let back=1; back<=6; back++){
+    const d = addDaysToDateStr(dateStr, -back);
+    const dsh = state.monthData.shifts[d];
+    if(dsh && Object.values(dsh).some(arr=>(arr||[]).includes(empId))) count++;
+    else break;
+  }
+  return count;
+}
+// 休み日数の下限を超えて休みすぎている社員を、他の枠へ追加で組み込みバランスを取る。
+// まず週1日休日を守れる範囲で調整し、それでも無理な場合のみ6連勤を許容する。
+function rebalanceStaffDaysOff(monthCounts, weeklyCounts){
+  const dates = buildMonthDates(state.month);
+  const totalDays = daysInMonth(state.month);
+  const staffList = state.employees.filter(e=>e.type==='staff' && e.monthMinDaysOff);
+  function tryFill(under, allowRelax){
+    let offDays = totalDays - (monthCounts[under.id]||0);
+    if(offDays <= under.monthMinDaysOff + 1) return;
+    for(const dateStr of dates){
+      if(offDays <= under.monthMinDaysOff + 1) break;
+      const weekKey = mondayOf(dateStr);
+      if(!state.monthData.shifts[dateStr]) state.monthData.shifts[dateStr] = {};
+      const daySh = state.monthData.shifts[dateStr];
+      const usedToday = new Set(Object.values(daySh).flat());
+      if(usedToday.has(under.id)) continue;
+      if(under.maxPerWeek && (weeklyCounts[weekKey]?.[under.id]||0) >= under.maxPerWeek) continue;
+      if(!allowRelax && consecutiveWorkedBefore(under.id, dateStr) >= 6) continue;
+      const slot = state.shiftSlots.find(s=> (s.id!=='night'||state.nightShiftEnabled) && isStaffCompatible(under, dateStr, s));
+      if(!slot) continue;
+      if(!daySh[slot.id]) daySh[slot.id] = [];
+      daySh[slot.id].push(under.id);
+      monthCounts[under.id] = (monthCounts[under.id]||0)+1;
+      if(!weeklyCounts[weekKey]) weeklyCounts[weekKey] = {};
+      weeklyCounts[weekKey][under.id] = (weeklyCounts[weekKey][under.id]||0)+1;
+      offDays--;
+    }
+  }
+  staffList.forEach(under=> tryFill(under, false));
+  staffList.forEach(under=> tryFill(under, true));
+}
 
-function pickForSlot(pool, slot, need, monthCounts, alreadyChosenIds){
+function pickForSlot(pool, slot, need, monthCounts, alreadyChosenIds, restBonusSet){
   if(need<=0) return [];
   const deptReq = slot.id==='early' ? ['bait'] : (slot.id==='late' ? ['bait','lure','tackle'] : []);
   const alreadyDepts = alreadyChosenIds.flatMap(id=>{ const e=state.employees.find(x=>x.id===id); return (e&&e.departments)||[]; });
+  // 2連休優先: 前日が休みだった人はできれば今日も休ませたいので、後回しにする(必要人数を満たせない場合は普通に選ばれる)
+  const restRank = (e)=> (restBonusSet && restBonusSet.has(e.id)) ? 1 : 0;
+  const cmp = (a,b)=> (a.shiftRank[slot.id]||99)-(b.shiftRank[slot.id]||99) || restRank(a)-restRank(b) || monthCounts[a.id]-monthCounts[b.id];
   let chosen = [];
   deptReq.filter(d=>!alreadyDepts.includes(d)).forEach(dept=>{
     if(chosen.length>=need) return;
-    const cand = pool.filter(e=> (e.departments||[]).includes(dept) && !chosen.includes(e))
-      .sort((a,b)=> (a.shiftRank[slot.id]||99)-(b.shiftRank[slot.id]||99) || monthCounts[a.id]-monthCounts[b.id]);
+    const cand = pool.filter(e=> (e.departments||[]).includes(dept) && !chosen.includes(e)).sort(cmp);
     if(cand[0]) chosen.push(cand[0]);
   });
   const remaining = need - chosen.length;
   if(remaining>0){
-    const rest = pool.filter(e=>!chosen.includes(e))
-      .sort((a,b)=> (a.shiftRank[slot.id]||99)-(b.shiftRank[slot.id]||99) || monthCounts[a.id]-monthCounts[b.id]);
+    const rest = pool.filter(e=>!chosen.includes(e)).sort(cmp);
     chosen = chosen.concat(rest.slice(0, remaining));
   }
   return chosen;
@@ -1278,9 +1326,9 @@ async function autoGenerateStaff(){
   if(hasExistingStaffShifts() && !confirm('既存の社員シフト(仮案)を上書きします。よろしいですか？')) return;
   ensureNightRotation();
   const dates = buildMonthDates(state.month);
-  const monthCounts = {}; const weeklyCounts = {};
+  const monthCounts = {}; const weeklyCounts = {}; const streak = {};
   const staffList = state.employees.filter(e=>e.type==='staff');
-  staffList.forEach(e=> monthCounts[e.id]=0);
+  staffList.forEach(e=>{ monthCounts[e.id]=0; streak[e.id]=0; });
   if(!state.monthData.shifts) state.monthData.shifts = {};
 
   dates.forEach(dateStr=>{
@@ -1298,7 +1346,7 @@ async function autoGenerateStaff(){
     });
     const usedToday = new Set(Object.values(daySh).flat());
 
-    // 要出勤の予定がある社員を、時間帯を完全にカバーする枠へ最優先で強制配置する
+    // 要出勤の予定がある社員を、時間帯を完全にカバーする枠へ最優先で強制配置する(確定予定のため週1日休日ルールの対象外)
     staffList.forEach(e=>{
       if(usedToday.has(e.id)) return;
       const st = getDayStatus(e.id, dateStr);
@@ -1316,14 +1364,22 @@ async function autoGenerateStaff(){
     if(nSlot && state.nightShiftEnabled){
       const need = (state.requiredStaff[dayKey] && state.requiredStaff[dayKey][nSlot.id]) || 0;
       if(need>0){
-        const person = nightPersonForDate(dateStr, monthCounts);
+        // まず週1日休日を守れる人を優先。どうしても見つからない場合のみ6連勤を許容
+        let person = nightPersonForDate(dateStr, monthCounts, streak, false);
+        if(!person) person = nightPersonForDate(dateStr, monthCounts, streak, true);
         if(person && !usedToday.has(person.id)){
           if(!daySh[nSlot.id]) daySh[nSlot.id] = [];
           daySh[nSlot.id] = [...daySh[nSlot.id], person.id];
           usedToday.add(person.id); monthCounts[person.id]++;
+          weeklyCounts[weekKey][person.id] = (weeklyCounts[weekKey][person.id]||0)+1;
         }
       }
     }
+    // 2連休優先: 前日休みだった社員の集合(今日もできれば休ませたい)
+    const yesterdaySh = state.monthData.shifts[addDaysToDateStr(dateStr, -1)] || {};
+    const workedYesterday = new Set(Object.values(yesterdaySh).flat());
+    const restBonusSet = new Set(staffList.filter(e=> !workedYesterday.has(e.id)).map(e=>e.id));
+
     state.shiftSlots.filter(s=>s.id!=='night').forEach(slot=>{
       const need = (state.requiredStaff[dayKey] && state.requiredStaff[dayKey][slot.id]) || 0;
       if(need<=0) return;
@@ -1331,13 +1387,32 @@ async function autoGenerateStaff(){
       let staffPool = staffList.filter(e=> !usedToday.has(e.id) && isStaffCompatible(e, dateStr, slot));
       staffPool = staffPool.filter(e=> !e.maxPerWeek || (weeklyCounts[weekKey][e.id]||0) < e.maxPerWeek);
       staffPool = staffPool.filter(e=> !e.monthMinDaysOff || (monthCounts[e.id]||0) < (daysInMonth(state.month) - e.monthMinDaysOff));
-      const chosenStaff = pickForSlot(staffPool, slot, need, monthCounts, []);
+
+      // フェーズ1: 週1日休日(労基法の最低ライン)を守れる人だけで埋める
+      const strictPool = staffPool.filter(e=> (streak[e.id]||0) < 6);
+      let chosenStaff = pickForSlot(strictPool, slot, need, monthCounts, [], restBonusSet);
+      // フェーズ2: それでも人数が埋まらない場合のみ、最終手段として6連勤を許容する
+      if(chosenStaff.length < need){
+        const relaxedPool = staffPool.filter(e=> !chosenStaff.includes(e));
+        const more = pickForSlot(relaxedPool, slot, need - chosenStaff.length, monthCounts, chosenStaff.map(e=>e.id), restBonusSet);
+        chosenStaff = chosenStaff.concat(more);
+      }
       chosenStaff.forEach(e=>{ monthCounts[e.id]++; weeklyCounts[weekKey][e.id]=(weeklyCounts[weekKey][e.id]||0)+1; usedToday.add(e.id); });
 
       if(!daySh[slot.id]) daySh[slot.id] = [];
       daySh[slot.id] = [...daySh[slot.id], ...chosenStaff.map(e=>e.id)];
     });
+
+    // 連勤カウントの更新: 今日勤務した人は+1、休みだった人は0にリセット
+    staffList.forEach(e=>{
+      if(usedToday.has(e.id)) streak[e.id] = (streak[e.id]||0)+1;
+      else streak[e.id] = 0;
+    });
   });
+
+  // 休み日数のバランス調整(下限+1日以内を目標に、休みが多すぎる人を他の枠へ追加)
+  rebalanceStaffDaysOff(monthCounts, weeklyCounts);
+
   await saveMonth(); render();
   toast('社員シフトを仮作成しました(内容を確認・調整してください)');
 }
@@ -1605,7 +1680,7 @@ function viewShift(){
     <div class="card">${monthSwitchHtml()}</div>
     <div class="card">
       <h2><span class="num">①</span>社員の大枠を自動仮作成</h2>
-      <p class="desc">部門・希望休(可能な限り)・予定(会議など)・勤務可能曜日/シフト・シフト適正順位・ナイトローテーションを考慮して仮配置します(あくまで仮案)。PAの割り当てには影響しません。再作成時は上書き確認が出ます。従業員を追加・削除した後にもう一度押せば、その内容を反映して作り直せます。</p>
+      <p class="desc">部門・希望休(可能な限り)・予定(会議など)・勤務可能曜日/シフト・シフト適正順位・ナイトローテーションを考慮して仮配置します(あくまで仮案)。同じ社員が7日連続で勤務することがないよう、原則として週1日以上の休日を確保します(どうしても人数が埋まらない場合のみ最終手段として6連勤を許容)。休み日数の下限を設定している社員は、下限+1日以内に収まるよう最後に調整します。PAの割り当てには影響しません。再作成時は上書き確認が出ます。従業員を追加・削除した後にもう一度押せば、その内容を反映して作り直せます。</p>
       <button class="btn btn-navy btn-block" onclick="autoGenerateStaff()">社員シフトを仮作成する</button>
     </div>
     ${nightRotationHtml()}
