@@ -229,6 +229,7 @@ let state = {
   shiftViewFilter: 'all',
   timelineEdit: null,
   consecutiveViolations: [],
+  duplicateAssignments: [],
   requiredConsecutiveConflicts: [],
   loaded: false
 };
@@ -1226,36 +1227,62 @@ function hasExistingStaffShifts(){
 }
 
 // ナイトの週間ローテーション
+// ナイトローテーションは「5日連続」を1ブロックとする(月初から5日ずつ区切る。暦週とは無関係)
+function nightBlockStartFor(dateStr){
+  const dates = buildMonthDates(state.month);
+  const idx = dates.indexOf(dateStr);
+  if(idx<0) return dateStr;
+  const blockIdx = Math.floor(idx/5);
+  return dates[blockIdx*5];
+}
+function nightBlockKeysOfMonth(ym){
+  const dates = buildMonthDates(ym);
+  const keys = [];
+  for(let i=0;i<dates.length;i+=5) keys.push(dates[i]);
+  return keys;
+}
+function nightDutyCountSoFar(empId, nSlotId){
+  let count = 0;
+  Object.keys(state.monthData.shifts||{}).forEach(d=>{
+    const daySh = state.monthData.shifts[d];
+    if(daySh && daySh[nSlotId] && daySh[nSlotId].includes(empId)) count++;
+  });
+  return count;
+}
 function ensureNightRotation(){
-  const weeks = computeWeekKeysOfMonth(state.month);
+  const blocks = nightBlockKeysOfMonth(state.month);
   const nightStaff = state.employees.filter(e=>e.type==='staff' && e.nightOk);
   if(!state.monthData.nightRotation) state.monthData.nightRotation = {};
   const rot = state.monthData.nightRotation;
   const usedCount = {}; nightStaff.forEach(e=> usedCount[e.id] = Object.values(rot).filter(id=>id===e.id).length);
-  weeks.forEach(wk=>{
-    if(rot[wk] || nightStaff.length===0) return;
+  blocks.forEach(bk=>{
+    if(rot[bk] || nightStaff.length===0) return;
     const pick = nightStaff.slice().sort((a,b)=> (usedCount[a.id]||0)-(usedCount[b.id]||0))[0];
-    rot[wk] = pick.id; usedCount[pick.id] = (usedCount[pick.id]||0)+1;
+    rot[bk] = pick.id; usedCount[pick.id] = (usedCount[pick.id]||0)+1;
   });
 }
-async function setNightRotation(weekKey, empId){
+async function setNightRotation(blockKey, empId){
   if(!state.monthData.nightRotation) state.monthData.nightRotation = {};
-  state.monthData.nightRotation[weekKey] = empId;
+  state.monthData.nightRotation[blockKey] = empId;
   await saveMonth(); render();
 }
 const MAX_CONSECUTIVE_DAYS = 5; // 最大連勤日数。いかなる理由(要出勤・ナイト・人員不足・休み調整)でも例外なし
-function nightPersonForDate(dateStr, monthCounts, streak){
-  const wk = mondayOf(dateStr);
+function nightPersonForDate(dateStr, monthCounts, streak, usedToday){
+  const bk = nightBlockStartFor(dateStr);
   const nSlot = nightSlot(); if(!nSlot) return null;
+  const nSlotId = nSlot.id;
   const withinDaysOffLimit = (e)=> !e.monthMinDaysOff || !monthCounts || (monthCounts[e.id]||0) < (daysInMonth(state.month) - e.monthMinDaysOff);
   const withinStreak = (e)=> !streak || (streak[e.id]||0) < MAX_CONSECUTIVE_DAYS;
   const withinInterval = (e)=> hasEnoughRestInterval(e.id, dateStr, nSlot);
-  const primaryId = (state.monthData.nightRotation||{})[wk];
+  const notUsedToday = (e)=> !usedToday || !usedToday.has(e.id);
+  const primaryId = (state.monthData.nightRotation||{})[bk];
   const primary = state.employees.find(e=>e.id===primaryId);
-  if(primary && isStaffCompatible(primary, dateStr, nSlot) && withinDaysOffLimit(primary) && withinStreak(primary) && withinInterval(primary)) return primary;
-  const altStaff = state.employees.filter(e=>e.type==='staff' && e.nightOk && e.id!==primaryId)
-    .find(e=> isStaffCompatible(e, dateStr, nSlot) && withinDaysOffLimit(e) && withinStreak(e) && withinInterval(e));
-  return altStaff || null;
+  if(primary && isStaffCompatible(primary, dateStr, nSlot) && withinDaysOffLimit(primary) && withinStreak(primary) && withinInterval(primary) && notUsedToday(primary)) return primary;
+  // 主担当が入れない日だけ、他のナイト可能な社員から優先順位(勤務負担が少ない→過去のナイト担当回数が少ない)で選ぶ
+  const altCandidates = state.employees.filter(e=>e.type==='staff' && e.nightOk && e.id!==primaryId)
+    .filter(e=> isStaffCompatible(e, dateStr, nSlot) && withinDaysOffLimit(e) && withinStreak(e) && withinInterval(e) && notUsedToday(e))
+    .sort((a,b)=> (monthCounts[a.id]||0)-(monthCounts[b.id]||0) || nightDutyCountSoFar(a.id, nSlotId)-nightDutyCountSoFar(b.id, nSlotId));
+  return altCandidates[0] || null;
 }
 function addDaysToDateStr(dateStr, n){
   const d = new Date(dateStr+'T00:00:00');
@@ -1279,6 +1306,31 @@ function consecutiveIfWorking(empId, dateStr){
     else break;
   }
   return back + 1 + fwd;
+}
+// ある従業員がその日、既に何らかの枠に勤務しているか(同日重複防止に使用)
+function isWorkingOnDate(empId, dateStr){
+  const sh = state.monthData.shifts[dateStr];
+  if(!sh) return false;
+  return Object.values(sh).some(arr=>(arr||[]).includes(empId));
+}
+// 月全体で「同一スタッフが同一日に2勤務以上」になっていないか最終チェックする(検知のみ・自動修正はしない)
+function computeDuplicateAssignments(){
+  const dates = buildMonthDates(state.month);
+  const violations = [];
+  dates.forEach(dateStr=>{
+    const sh = state.monthData.shifts[dateStr]; if(!sh) return;
+    const countPerEmp = {};
+    Object.keys(sh).forEach(slotId=>{
+      (sh[slotId]||[]).forEach(id=>{ countPerEmp[id] = (countPerEmp[id]||0)+1; });
+    });
+    Object.keys(countPerEmp).forEach(id=>{
+      if(countPerEmp[id] > 1){
+        const e = state.employees.find(x=>x.id===id);
+        if(e) violations.push({emp:e, dateStr, count:countPerEmp[id]});
+      }
+    });
+  });
+  return violations;
 }
 // 現時点で全従業員の連勤日数が5日以内に収まっているか、月全体を最終チェックする(検知のみ・自動修正はしない)
 function computeConsecutiveViolations(){
@@ -1398,6 +1450,7 @@ function reallocateSurplusStaff(){
         let candidates = otherAssigned.filter(id=>{
           const e = state.employees.find(x=>x.id===id);
           if(!e) return false;
+          if(isWorkingOnDate(id, sh.dateStr)) return false; // 同日重複防止(移動先の日に既に別枠で勤務している場合は対象外)
           if(!isStaffCompatible(e, sh.dateStr, sh.slot)) return false; // 本人の希望シフトに含まれない時間帯には割り振らない
           if(!hasEnoughRestInterval(id, sh.dateStr, sh.slot)) return false;
           if(consecutiveIfWorking(id, sh.dateStr) > MAX_CONSECUTIVE_DAYS) return false; // 5連勤ルールは例外なし
@@ -1493,24 +1546,44 @@ async function autoGenerateStaff(){
       weeklyCounts[weekKey][e.id] = (weeklyCounts[weekKey][e.id]||0)+1;
     });
 
-    const nSlot = nightSlot();
-    if(nSlot && state.nightShiftEnabled){
-      const need = (state.requiredStaff[dayKey] && state.requiredStaff[dayKey][nSlot.id]) || 0;
-      if(need>0){
-        const person = nightPersonForDate(dateStr, monthCounts, streak); // 5連勤ルールは例外なし
-        if(person && !usedToday.has(person.id)){
-          if(!daySh[nSlot.id]) daySh[nSlot.id] = [];
-          daySh[nSlot.id] = [...daySh[nSlot.id], person.id];
-          usedToday.add(person.id); monthCounts[person.id]++;
-          monthHours[person.id] = (monthHours[person.id]||0) + slotHoursCalc(nSlot);
-          weeklyCounts[weekKey][person.id] = (weeklyCounts[weekKey][person.id]||0)+1;
-        }
-      }
-    }
     // 2連休優先: 前日休みだった社員の集合(今日もできれば休ませたい)
     const yesterdaySh = state.monthData.shifts[addDaysToDateStr(dateStr, -1)] || {};
     const workedYesterday = new Set(Object.values(yesterdaySh).flat());
     const restBonusSet = new Set(staffList.filter(e=> !workedYesterday.has(e.id)).map(e=>e.id));
+
+    const nSlot = nightSlot();
+    if(nSlot && state.nightShiftEnabled){
+      const need = (state.requiredStaff[dayKey] && state.requiredStaff[dayKey][nSlot.id]) || 0;
+      if(need>0){
+        const chosenNight = [];
+        const primary = nightPersonForDate(dateStr, monthCounts, streak, usedToday); // 5連勤ルール・重複防止は例外なし
+        if(primary){
+          chosenNight.push(primary);
+          usedToday.add(primary.id); monthCounts[primary.id]++;
+          monthHours[primary.id] = (monthHours[primary.id]||0) + slotHoursCalc(nSlot);
+          weeklyCounts[weekKey][primary.id] = (weeklyCounts[weekKey][primary.id]||0)+1;
+        }
+        // 必要人数が2人以上の場合、同じ人を重複させず別の候補を追加で選ぶ
+        const remainingNightNeed = need - chosenNight.length;
+        if(remainingNightNeed>0){
+          let nightPool = staffList.filter(e=> !usedToday.has(e.id) && e.nightOk && isStaffCompatible(e, dateStr, nSlot));
+          nightPool = nightPool.filter(e=> !e.maxPerWeek || (weeklyCounts[weekKey][e.id]||0) < e.maxPerWeek);
+          nightPool = nightPool.filter(e=> !e.monthMinDaysOff || (monthCounts[e.id]||0) < (daysInMonth(state.month) - e.monthMinDaysOff));
+          nightPool = nightPool.filter(e=> hasEnoughRestInterval(e.id, dateStr, nSlot));
+          nightPool = nightPool.filter(e=> (streak[e.id]||0) < MAX_CONSECUTIVE_DAYS);
+          const moreNight = pickForSlot(nightPool, nSlot, remainingNightNeed, monthCounts, [], restBonusSet, streak, monthHours);
+          moreNight.forEach(e=>{
+            chosenNight.push(e); usedToday.add(e.id); monthCounts[e.id]++;
+            monthHours[e.id] = (monthHours[e.id]||0) + slotHoursCalc(nSlot);
+            weeklyCounts[weekKey][e.id] = (weeklyCounts[weekKey][e.id]||0)+1;
+          });
+        }
+        if(chosenNight.length){
+          if(!daySh[nSlot.id]) daySh[nSlot.id] = [];
+          daySh[nSlot.id] = [...daySh[nSlot.id], ...chosenNight.map(e=>e.id)];
+        }
+      }
+    }
 
     state.shiftSlots.filter(s=>s.id!=='night').forEach(slot=>{
       const need = (state.requiredStaff[dayKey] && state.requiredStaff[dayKey][slot.id]) || 0;
@@ -1544,14 +1617,16 @@ async function autoGenerateStaff(){
   // 必要人数を超えている枠から、不足している枠へ社員を振り分ける(勤務間隔・5連勤ルールを守った上で)
   reallocateSurplusStaff();
 
-  // 最終チェック: 6連勤以上が生じていないか検知して記録(検知のみ・自動修正はしない)
+  // 最終チェック: 6連勤以上・同日重複が生じていないか検知して記録(検知のみ・自動修正はしない)
   state.consecutiveViolations = computeConsecutiveViolations();
+  state.duplicateAssignments = computeDuplicateAssignments();
   state.requiredConsecutiveConflicts = requiredConflicts;
 
   await saveMonth(); render();
   const warnParts = [];
   if(requiredConflicts.length) warnParts.push(`要出勤の衝突${requiredConflicts.length}件`);
   if(state.consecutiveViolations.length) warnParts.push(`連勤ルール要確認${state.consecutiveViolations.length}件`);
+  if(state.duplicateAssignments.length) warnParts.push(`同日重複${state.duplicateAssignments.length}件`);
   toast(warnParts.length ? `社員シフトを仮作成しました(${warnParts.join('・')}。要確認)` : '社員シフトを仮作成しました(内容を確認・調整してください)');
 }
 
@@ -1695,16 +1770,19 @@ function nightRotationHtml(){
   const nSlot = nightSlot(); if(!nSlot) return '';
   ensureNightRotation();
   const nightStaff = state.employees.filter(e=>e.type==='staff' && e.nightOk);
-  const weeks = computeWeekKeysOfMonth(state.month);
-  const rows = weeks.map(wk=>{
-    const label = `${formatSlashDate(wk)}〜${formatSlashDate((()=>{ const d=new Date(wk+'T00:00:00'); d.setDate(d.getDate()+6); return d.toISOString().slice(0,10); })())}`;
-    const current = (state.monthData.nightRotation||{})[wk] || '';
+  const blocks = nightBlockKeysOfMonth(state.month);
+  const dates = buildMonthDates(state.month);
+  const rows = blocks.map(bk=>{
+    const startIdx = dates.indexOf(bk);
+    const endIdx = Math.min(startIdx+4, dates.length-1);
+    const label = `${formatSlashDate(bk)}〜${formatSlashDate(dates[endIdx])}(${endIdx-startIdx+1}日間)`;
+    const current = (state.monthData.nightRotation||{})[bk] || '';
     const options = nightStaff.map(e=>`<option value="${e.id}" ${current===e.id?'selected':''}>${escapeHtml(e.name)}</option>`).join('');
     return `<div class="row"><div style="flex:1.3;"><label>${label}</label></div>
-      <div><select onchange="setNightRotation('${wk}', this.value)">${options || '<option value="">ナイト可の社員なし</option>'}</select></div></div>`;
+      <div><select onchange="setNightRotation('${bk}', this.value)">${options || '<option value="">ナイト可の社員なし</option>'}</select></div></div>`;
   }).join('');
-  return `<div class="card"><h2><span class="num">ナイト</span>週間ローテーション(社員基準)</h2>
-    <p class="desc">週ごとの主担当(社員)を自動割り当て。手動変更も可能。当日希望休などで担当できない日は、他のナイト可能な社員に自動的に振り替えます。</p>
+  return `<div class="card"><h2><span class="num">ナイト</span>5連勤単位ローテーション(社員基準)</h2>
+    <p class="desc">月初から5日ずつのブロックで主担当を自動割り当て(暦週とは無関係)。手動変更も可能。当日希望休などで担当できない日や、最大5連勤を超えてしまう日だけ、勤務負担・過去のナイト担当回数が少ない社員に自動的に振り替えます(その場合も最大5連勤・勤務間隔12時間は必ず守ります)。</p>
     ${rows || '<div class="empty">ナイト可能な社員がいません</div>'}</div>`;
 }
 
@@ -1768,6 +1846,14 @@ function viewShift(){
       <h2 style="color:#8a2c22;"><span class="num" style="background:#f3c9c4;color:#8a2c22;">要確認</span>6連勤以上が検出されました</h2>
       <p class="desc">自動作成のルールでは発生しないはずですが、手動調整の結果などにより6連勤以上になっている箇所があります。確認・修正してください。</p>
       ${consecutiveViolations.map(w=>`<div class="shortItem">${escapeHtml(w.emp.name)}：${formatSlashDate(w.dateStr)}時点で${w.streakLen}連勤</div>`).join('')}
+    </div>` : '';
+
+  const duplicateAssignments = state.duplicateAssignments || [];
+  const duplicateAssignmentHtml = duplicateAssignments.length ? `
+    <div class="card shortCard">
+      <h2 style="color:#8a2c22;"><span class="num" style="background:#f3c9c4;color:#8a2c22;">要確認</span>同日重複勤務が検出されました</h2>
+      <p class="desc">自動作成のルールでは発生しないはずですが、手動調整の結果などにより同じ人が同じ日に複数の枠へ入っています。確認・修正してください。</p>
+      ${duplicateAssignments.map(w=>`<div class="shortItem">${escapeHtml(w.emp.name)}：${formatSlashDate(w.dateStr)}に${w.count}枠</div>`).join('')}
     </div>` : '';
 
   const dates = buildMonthDates(state.month);
@@ -1848,6 +1934,7 @@ function viewShift(){
     ${unmatchedHtml}
     ${requiredConflictHtml}
     ${consecutiveViolationHtml}
+    ${duplicateAssignmentHtml}
     <div class="card">
       <h2><span class="num">③</span>最終確認・手動調整</h2>
       <p class="desc">名前をタップすると割り当て/解除を切り替えられます。変更するたびに必要人数・不足・部門・勤務時間は自動再計算されます。</p>
