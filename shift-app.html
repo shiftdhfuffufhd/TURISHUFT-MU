@@ -1783,10 +1783,10 @@ async function autoGenerateStaff(){
     });
   });
 
-  // 方針: まず必要人数(下限)を必ず満たす。そのうえで、休みに余裕がある人は
-  // 下限まで使い切るよう追加配置する(必要人数を超えて配置することもある)。
+  // 方針: 自動仮作成では必要最低人数(下限)のみを満たす。休みが多い人への追加配置は行わず、
+  // 手動で追加する運用を基本とする(状況カードで休みが多い人が分かるようにしている)。
   const filledCount = fillRemainingShortages(monthCounts, weeklyCounts, monthHours);
-  const maximizedCount = maximizeStaffUsage(monthCounts, weeklyCounts, monthHours);
+  const maximizedCount = 0;
 
   // 最終防波堤: 途中のロジックに抜け穴があっても、6連勤以上を絶対に残さないよう強制的に取り消す
   const forcedRemovals = enforceConsecutiveLimitHardStop();
@@ -1935,13 +1935,21 @@ function workloadSummaryHtml(){
     const days = empMonthDays(e.id);
     const off = totalDays - days;
     const badge = e.type==='staff' ? '社員' : 'PA';
+    const overTolerance = (e.type==='staff' && e.monthMinDaysOff) ? (off - e.monthMinDaysOff) : null;
     const offTxt = e.type==='staff' && e.monthMinDaysOff ? `${off}日(下限${e.monthMinDaysOff}日)` : `${off}日`;
-    return `<div class="empItem" style="margin-bottom:6px;padding:8px 10px;">
-      <div class="topRow"><div class="name" style="font-size:12.5px;">${escapeHtml(e.name)} <span class="typeBadge ${e.type}">${badge}</span></div>
-      <div class="mono" style="font-size:12px;color:var(--navyChip);">${days}日出勤 / 休み${offTxt} / ${hours}h</div></div>
-    </div>`;
-  }).join('');
-  return `<div class="card"><h2><span class="num">状況</span>今月の勤務日数・休み日数・時間(自動集計)</h2>${rows}</div>`;
+    const isOver = overTolerance!==null && overTolerance>2;
+    const offColor = isOver ? 'var(--danger)' : 'var(--navyChip)';
+    const overBadge = isOver ? `<span class="typeBadge" style="background:#f3c9c4;color:#8a2c22;">休み下限+${overTolerance}日</span>` : '';
+    return {
+      html: `<div class="empItem" style="margin-bottom:6px;padding:8px 10px;">
+      <div class="topRow"><div class="name" style="font-size:12.5px;">${escapeHtml(e.name)} <span class="typeBadge ${e.type}">${badge}</span> ${overBadge}</div>
+      <div class="mono" style="font-size:12px;color:${offColor};font-weight:${isOver?'700':'400'};">${days}日出勤 / 休み${offTxt} / ${hours}h</div></div>
+    </div>`,
+      sortKey: overTolerance===null ? -999 : overTolerance
+    };
+  }).sort((a,b)=> b.sortKey - a.sortKey).map(r=>r.html).join('');
+  return `<div class="card"><h2><span class="num">状況</span>今月の勤務日数・休み日数・時間(自動集計)</h2>
+    <p class="desc">休みが下限+2日を超えている社員は赤字で表示されます(休みが多い順に並んでいます)。手動でシフトを追加する際の目安にしてください。</p>${rows}</div>`;
 }
 
 function nightRotationHtml(){
@@ -2115,7 +2123,7 @@ function viewShift(){
     <div class="card">${monthSwitchHtml()}</div>
     <div class="card">
       <h2><span class="num">①</span>社員の大枠を自動仮作成</h2>
-      <p class="desc">まず<b>必要人数(下限)を必ず満たす</b>ことを絶対条件とし、そのうえで休みが下限+1日を超えている人がいれば、対応できる枠へ追加配置し、<b>休みを下限+1日以内に収めます</b>(下限+1日までは許容範囲とし、過剰配置を最小限に抑えます。この追加配置は必要人数を超えることがあります)。部門・希望休(可能な限り)・予定(会議など)・勤務可能曜日/シフト・シフト適正順位・ナイトローテーションを考慮します。<b>最大連勤日数は5日で、要出勤・ナイト・人員不足など、いかなる理由があっても6連勤以上は作成しません。</b>勤務間隔は14時間以上を確保します。まず全ての枠で第1希望の人だけを対象に埋め、それでも埋まらない枠だけ第2希望、第3希望…の順に対象を広げます。同じ希望順位の候補が複数いる場合は、まず勤務日数・時間の公平性を優先し、それでも並んだ場合にのみ希望シフトの選択肢が少ない人を優先します。5連勤以内・条件を満たす候補がいない場合は、無理に埋めず人員不足として表示します。PAの割り当てには影響しません。再作成時は上書き確認が出ます。従業員を追加・削除した後にもう一度押せば、その内容を反映して作り直せます。</p>
+      <p class="desc">まず<b>必要人数(下限)を必ず満たす</b>ことを絶対条件とし、それ以上の過剰な自動配置は行いません(不足があれば埋めますが、休みが多い人を無理に追加配置することはしません)。休みが下限+2日を超えている社員がいないかは、下の「状況」カードで赤字表示され、ひと目で確認できます。必要であれば、そこから手動でシフトを追加してください(自動→手動→確認、という流れを想定しています)。部門・希望休(可能な限り)・予定(会議など)・勤務可能曜日/シフト・シフト適正順位・ナイトローテーションを考慮します。<b>最大連勤日数は5日で、要出勤・ナイト・人員不足など、いかなる理由があっても6連勤以上は作成しません。</b>勤務間隔は14時間以上を確保します。まず全ての枠で第1希望の人だけを対象に埋め、それでも埋まらない枠だけ第2希望、第3希望…の順に対象を広げます。同じ希望順位の候補が複数いる場合は、まず勤務日数・時間の公平性を優先し、それでも並んだ場合にのみ希望シフトの選択肢が少ない人を優先します。5連勤以内・条件を満たす候補がいない場合は、無理に埋めず人員不足として表示します。PAの割り当てには影響しません。再作成時は上書き確認が出ます。従業員を追加・削除した後にもう一度押せば、その内容を反映して作り直せます。</p>
       <button class="btn btn-navy btn-block" onclick="autoGenerateStaff()">社員シフトを仮作成する</button>
     </div>
     ${nightRotationHtml()}
