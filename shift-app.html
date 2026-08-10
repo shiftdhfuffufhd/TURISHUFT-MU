@@ -230,6 +230,7 @@ let state = {
   timelineEdit: null,
   consecutiveViolations: [],
   duplicateAssignments: [],
+  forcedConsecutiveRemovals: [],
   requiredConsecutiveConflicts: [],
   loaded: false
 };
@@ -1352,6 +1353,33 @@ function computeConsecutiveViolations(){
   });
   return violations;
 }
+// 最終防波堤: 途中のロジックに抜け穴があっても、6連勤以上を絶対に残さないよう強制的に取り消す。
+// 月の最初から順に連勤日数を数え、6日目にあたる勤務が見つかったら強制的に取り消す(その日は人員不足になる)。
+function enforceConsecutiveLimitHardStop(){
+  const dates = buildMonthDates(state.month);
+  const staffList = state.employees.filter(e=>e.type==='staff');
+  const removed = [];
+  staffList.forEach(e=>{
+    let streakLen = 0;
+    dates.forEach(dateStr=>{
+      const sh = state.monthData.shifts[dateStr]; if(!sh) { streakLen = 0; return; }
+      const worked = Object.values(sh).some(arr=>(arr||[]).includes(e.id));
+      if(worked){
+        streakLen++;
+        if(streakLen > MAX_CONSECUTIVE_DAYS){
+          Object.keys(sh).forEach(slotId=>{
+            if((sh[slotId]||[]).includes(e.id)) sh[slotId] = sh[slotId].filter(id=>id!==e.id);
+          });
+          removed.push({emp:e, dateStr});
+          streakLen = 0; // 取り消したのでこの日は「休み」扱いになる
+        }
+      }else{
+        streakLen = 0;
+      }
+    });
+  });
+  return removed;
+}
 // 休み日数の下限を超えて休みすぎている社員を、他の枠へ追加で組み込みバランスを取る(5連勤ルールは例外なし)
 function rebalanceStaffDaysOff(monthCounts, weeklyCounts){
   const dates = buildMonthDates(state.month);
@@ -1617,7 +1645,10 @@ async function autoGenerateStaff(){
   // 必要人数を超えている枠から、不足している枠へ社員を振り分ける(勤務間隔・5連勤ルールを守った上で)
   reallocateSurplusStaff();
 
-  // 最終チェック: 6連勤以上・同日重複が生じていないか検知して記録(検知のみ・自動修正はしない)
+  // 最終防波堤: 途中のロジックに抜け穴があっても、6連勤以上を絶対に残さないよう強制的に取り消す
+  const forcedRemovals = enforceConsecutiveLimitHardStop();
+  state.forcedConsecutiveRemovals = forcedRemovals;
+  // 最終チェック: 同日重複が生じていないか検知して記録(検知のみ・自動修正はしない)
   state.consecutiveViolations = computeConsecutiveViolations();
   state.duplicateAssignments = computeDuplicateAssignments();
   state.requiredConsecutiveConflicts = requiredConflicts;
@@ -1625,7 +1656,7 @@ async function autoGenerateStaff(){
   await saveMonth(); render();
   const warnParts = [];
   if(requiredConflicts.length) warnParts.push(`要出勤の衝突${requiredConflicts.length}件`);
-  if(state.consecutiveViolations.length) warnParts.push(`連勤ルール要確認${state.consecutiveViolations.length}件`);
+  if(forcedRemovals.length) warnParts.push(`6連勤防止のため強制取消${forcedRemovals.length}件`);
   if(state.duplicateAssignments.length) warnParts.push(`同日重複${state.duplicateAssignments.length}件`);
   toast(warnParts.length ? `社員シフトを仮作成しました(${warnParts.join('・')}。要確認)` : '社員シフトを仮作成しました(内容を確認・調整してください)');
 }
@@ -1856,6 +1887,14 @@ function viewShift(){
       ${duplicateAssignments.map(w=>`<div class="shortItem">${escapeHtml(w.emp.name)}：${formatSlashDate(w.dateStr)}に${w.count}枠</div>`).join('')}
     </div>` : '';
 
+  const forcedRemovals = state.forcedConsecutiveRemovals || [];
+  const forcedRemovalHtml = forcedRemovals.length ? `
+    <div class="card deptWarnCard">
+      <h2 style="color:#7a5410;"><span class="num" style="background:#f3dfb3;color:#7a5410;">強制取消</span>6連勤防止のため取り消した勤務</h2>
+      <p class="desc">最大5連勤を絶対に超えないよう、以下の勤務を自動的に取り消しました。該当日・枠は人員不足になっている可能性があるため、候補一覧から手動で対応してください。</p>
+      ${forcedRemovals.map(w=>`<div class="deptWarnItem">${escapeHtml(w.emp.name)}：${formatSlashDate(w.dateStr)}の勤務を取消(6連勤目だったため)</div>`).join('')}
+    </div>` : '';
+
   const dates = buildMonthDates(state.month);
   const filter = state.shiftViewFilter;
 
@@ -1935,6 +1974,7 @@ function viewShift(){
     ${requiredConflictHtml}
     ${consecutiveViolationHtml}
     ${duplicateAssignmentHtml}
+    ${forcedRemovalHtml}
     <div class="card">
       <h2><span class="num">③</span>最終確認・手動調整</h2>
       <p class="desc">名前をタップすると割り当て/解除を切り替えられます。変更するたびに必要人数・不足・部門・勤務時間は自動再計算されます。</p>
