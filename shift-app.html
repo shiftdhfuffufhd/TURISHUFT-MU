@@ -290,6 +290,7 @@ function visibleSlots(){ return state.nightShiftEnabled ? state.shiftSlots : non
 function getDayStatus(empId, dateStr){
   const rec = state.monthData.availability[empId];
   const base = {available:false, offRequested:false, slots:[], rangeStart:'', rangeEnd:'', specialEntry:null};
+  // specialEntry: {content, start, end, kind:'required'|'off'}
   if(rec && rec[dateStr]) return {...base, ...rec[dateStr]};
   return base;
 }
@@ -912,7 +913,7 @@ function onStaffCalTap(empId, dateStr){
 }
 async function updateStaffSpecial(empId, dateStr, field, val){
   const st = getDayStatus(empId, dateStr);
-  const cur = st.specialEntry || {content:'', start:'', end:''};
+  const cur = st.specialEntry || {content:'', start:'', end:'', kind:'off'};
   const specialEntry = {...cur, [field]: val};
   setDayStatus(empId, dateStr, {specialEntry});
   await saveMonth(); render();
@@ -923,7 +924,8 @@ async function clearStaffSpecial(empId, dateStr){
 }
 function staffSpecialPanelHtml(empId, dateStr){
   const st = getDayStatus(empId, dateStr);
-  const sp = st.specialEntry || {content:'', start:'', end:''};
+  const sp = st.specialEntry || {content:'', start:'', end:'', kind:'off'};
+  const kind = sp.kind || 'off';
   return `
     <div class="dayDetail">
       <div class="ddTitle">${formatMD(dateStr)}(${weekdayLabelOfDate(dateStr)}) の予定(会議・半休など)</div>
@@ -933,7 +935,15 @@ function staffSpecialPanelHtml(empId, dateStr){
         <div><label>開始</label><input type="time" value="${sp.start}" onchange="updateStaffSpecial('${empId}','${dateStr}','start',this.value)"></div>
         <div><label>終了</label><input type="time" value="${sp.end}" onchange="updateStaffSpecial('${empId}','${dateStr}','end',this.value)"></div>
       </div>
-      <p class="desc" style="margin:6px 0 0;">この時間帯と重なる勤務シフトには、自動仮作成でこの社員を配置しないようにします(シフト作成画面にも表示されます)。</p>
+      <label style="margin-top:8px;">種別</label>
+      <div class="segToggle">
+        <button class="${kind==='required'?'active':''}" onclick="updateStaffSpecial('${empId}','${dateStr}','kind','required')">要出勤</button>
+        <button class="${kind==='off'?'active':''}" onclick="updateStaffSpecial('${empId}','${dateStr}','kind','off')">非出勤(半休など)</button>
+      </div>
+      <p class="desc" style="margin:6px 0 0;">
+        「要出勤」：この時間帯と重なるシフト枠に、自動仮作成で必ずこの社員を配置します。<br>
+        「非出勤」：この時間帯はシフトの必要人数の計算には使いません(配置候補から外れます)が、出勤日数にはカウントされます。
+      </p>
       ${sp.content ? `<button class="btn btn-ghost btn-sm" style="margin-top:8px;" onclick="clearStaffSpecial('${empId}','${dateStr}')">この予定を削除</button>` : ''}
     </div>`;
 }
@@ -1088,11 +1098,17 @@ function empMonthHours(empId){
 }
 function empMonthDays(empId){
   const shifts = state.monthData.shifts || {};
-  let count = 0;
+  const dateSet = new Set();
   Object.keys(shifts).forEach(dateStr=>{
-    if(Object.values(shifts[dateStr]).some(arr=>(arr||[]).includes(empId))) count++;
+    if(Object.values(shifts[dateStr]).some(arr=>(arr||[]).includes(empId))) dateSet.add(dateStr);
   });
-  return count;
+  // 非出勤(半休など)の予定がある日も出勤日数としてカウントする
+  const dates = buildMonthDates(state.month);
+  dates.forEach(dateStr=>{
+    const st = getDayStatus(empId, dateStr);
+    if(st.specialEntry && st.specialEntry.content && (st.specialEntry.kind||'off')==='off') dateSet.add(dateStr);
+  });
+  return dateSet.size;
 }
 
 // ---------- 判定・候補ロジック ----------
@@ -1104,7 +1120,10 @@ function isStaffCompatible(staffEmp, dateStr, slot){
   const st = getDayStatus(staffEmp.id, dateStr);
   if(st.offRequested) return false;
   const sp = st.specialEntry;
-  if(sp && sp.content && sp.start && sp.end && timesOverlap(slot.start, slot.end, sp.start, sp.end)) return false;
+  if(sp && sp.content && sp.start && sp.end && timesOverlap(slot.start, slot.end, sp.start, sp.end)){
+    // 非出勤(半休など)の予定と重なる枠には通常の自動配置では入れない。要出勤は別途強制配置するのでここでは素通り。
+    if((sp.kind||'off') === 'off') return false;
+  }
   return true;
 }
 function isCandidateCompatible(emp, dateStr, slot){
@@ -1306,6 +1325,20 @@ async function autoGenerateStaff(){
     });
     const usedToday = new Set(Object.values(daySh).flat());
 
+    // 要出勤の予定がある社員を、時間が重なる枠へ最優先で強制配置する
+    staffList.forEach(e=>{
+      if(usedToday.has(e.id)) return;
+      const st = getDayStatus(e.id, dateStr);
+      const sp = st.specialEntry;
+      if(!(sp && sp.content && sp.start && sp.end && (sp.kind||'off')==='required')) return;
+      const matchSlot = state.shiftSlots.find(slot=> timesOverlap(slot.start, slot.end, sp.start, sp.end));
+      if(!matchSlot) return;
+      if(!daySh[matchSlot.id]) daySh[matchSlot.id] = [];
+      daySh[matchSlot.id].push(e.id);
+      usedToday.add(e.id); monthCounts[e.id] = (monthCounts[e.id]||0)+1;
+      weeklyCounts[weekKey][e.id] = (weeklyCounts[weekKey][e.id]||0)+1;
+    });
+
     const nSlot = nightSlot();
     if(nSlot && state.nightShiftEnabled){
       const need = (state.requiredStaff[dayKey] && state.requiredStaff[dayKey][nSlot.id]) || 0;
@@ -1442,7 +1475,8 @@ function staffSpecialNotesHtml(dateStr){
     if(st.specialEntry && st.specialEntry.content){
       const sp = st.specialEntry;
       const timeTxt = (sp.start && sp.end) ? `${sp.start}〜${sp.end}` : '';
-      notes.push(`${escapeHtml(e.name)}：${escapeHtml(sp.content)} ${timeTxt}`);
+      const kindTxt = (sp.kind||'off')==='required' ? '要出勤' : '非出勤';
+      notes.push(`${escapeHtml(e.name)}：${escapeHtml(sp.content)}(${kindTxt}) ${timeTxt}`);
     }
   });
   if(notes.length===0) return '';
