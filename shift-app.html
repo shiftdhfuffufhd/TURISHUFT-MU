@@ -1142,6 +1142,25 @@ function isStaffCompatible(staffEmp, dateStr, slot){
   }
   return true;
 }
+// 枠の処理順序を決めるための「希少度」を計算する。
+// 単純な候補者総数ではなく、「その枠を第1希望にしている人数」を最優先の指標にする。
+// (第1希望者が少ない枠を先に確保しないと、他の枠の第2・第3希望候補として先に奪われてしまうため)
+function slotScarcityScore(slot, dateStr, candidatePool){
+  let rank1Count = 0, totalCount = 0;
+  candidatePool.forEach(e=>{
+    if(!isStaffCompatible(e, dateStr, slot)) return;
+    totalCount++;
+    if((e.shiftRank && e.shiftRank[slot.id])===1) rank1Count++;
+  });
+  return {rank1Count, totalCount};
+}
+function sortSlotsByScarcity(slots, dateStr, candidatePool){
+  return slots.slice().sort((a,b)=>{
+    const sa = slotScarcityScore(a, dateStr, candidatePool);
+    const sb = slotScarcityScore(b, dateStr, candidatePool);
+    return (sa.rank1Count - sb.rank1Count) || (sa.totalCount - sb.totalCount);
+  });
+}
 function getAssigned(dateStr, slotId){
   return ((state.monthData.shifts[dateStr]||{})[slotId]) || [];
 }
@@ -1524,13 +1543,8 @@ function fillRemainingShortages(monthCounts, weeklyCounts, monthHours){
     const weekKey = mondayOf(dateStr);
     if(!state.monthData.shifts[dateStr]) state.monthData.shifts[dateStr] = {};
     const daySh = state.monthData.shifts[dateStr];
-    const slotsByScarcity = state.shiftSlots.slice().sort((a,b)=>{
-      const countFor = (slot)=>{
-        const usedNow = new Set(Object.values(daySh).flat());
-        return staffList.filter(e=> !usedNow.has(e.id) && isStaffCompatible(e, dateStr, slot)).length;
-      };
-      return countFor(a) - countFor(b);
-    });
+    const usedNow0 = new Set(Object.values(daySh).flat());
+    const slotsByScarcity = sortSlotsByScarcity(state.shiftSlots, dateStr, staffList.filter(e=>!usedNow0.has(e.id)));
     slotsByScarcity.forEach(slot=>{
       const need = (state.requiredStaff[dayKey]&&state.requiredStaff[dayKey][slot.id])||0;
       if(need<=0) return;
@@ -1728,32 +1742,37 @@ async function autoGenerateStaff(){
       }
     }
 
-    // 対応できる候補者が少ない枠(希少な枠)から先に埋める。
-    // 候補者が多い枠を先に埋めてしまうと、希少な枠の候補者を横取りしてしまうため。
+    // 希望順位のパス方式で埋める: まず全ての枠で「第1希望」の人だけを対象に埋め、
+    // それでも埋まらない枠だけ「第2希望」、さらに「第3希望」…の順に対象を広げる。
+    // (枠の処理順で決めると、ある人の第1希望が後回しにされ、別の枠の第2希望として先に取られてしまうことがあるため)
     const normalSlots = state.shiftSlots.filter(s=>s.id!=='night');
-    const slotsByScarcity = normalSlots.slice().sort((a,b)=>{
-      const countFor = (slot)=> staffList.filter(e=> !usedToday.has(e.id) && isStaffCompatible(e, dateStr, slot)).length;
-      return countFor(a) - countFor(b);
-    });
-    slotsByScarcity.forEach(slot=>{
-      const need = (state.requiredStaff[dayKey] && state.requiredStaff[dayKey][slot.id]) || 0;
-      if(need<=0) return;
+    for(let rankLevel=1; rankLevel<=PREF_LEVELS+1; rankLevel++){
+      normalSlots.forEach(slot=>{
+        const need = (state.requiredStaff[dayKey] && state.requiredStaff[dayKey][slot.id]) || 0;
+        if(need<=0) return;
+        const already = (daySh[slot.id]||[]).filter(id=>{ const e=state.employees.find(x=>x.id===id); return e&&e.type==='staff'; });
+        const remaining = need - already.length;
+        if(remaining<=0) return;
 
-      let staffPool = staffList.filter(e=> !usedToday.has(e.id) && isStaffCompatible(e, dateStr, slot));
-      staffPool = staffPool.filter(e=> !e.maxPerWeek || (weeklyCounts[weekKey][e.id]||0) < e.maxPerWeek);
-      staffPool = staffPool.filter(e=> !e.monthMinDaysOff || (monthCounts[e.id]||0) < (daysInMonth(state.month) - e.monthMinDaysOff));
-      staffPool = staffPool.filter(e=> hasEnoughRestInterval(e.id, dateStr, slot)); // 勤務間隔14時間以上
-      staffPool = staffPool.filter(e=> (streak[e.id]||0) < MAX_CONSECUTIVE_DAYS); // 最大5連勤・例外なし
+        let staffPool = staffList.filter(e=> !usedToday.has(e.id) && isStaffCompatible(e, dateStr, slot));
+        // rankLevel <= PREF_LEVELS の間は、その希望順位ちょうどの人だけを対象にする。
+        // 最後の1回(PREF_LEVELS+1)だけ、希望順位を問わず残り全員を対象にする最終フォールバック。
+        if(rankLevel<=PREF_LEVELS) staffPool = staffPool.filter(e=> (e.shiftRank[slot.id]||0)===rankLevel);
+        staffPool = staffPool.filter(e=> !e.maxPerWeek || (weeklyCounts[weekKey][e.id]||0) < e.maxPerWeek);
+        staffPool = staffPool.filter(e=> !e.monthMinDaysOff || (monthCounts[e.id]||0) < (daysInMonth(state.month) - e.monthMinDaysOff));
+        staffPool = staffPool.filter(e=> hasEnoughRestInterval(e.id, dateStr, slot)); // 勤務間隔14時間以上
+        staffPool = staffPool.filter(e=> (streak[e.id]||0) < MAX_CONSECUTIVE_DAYS); // 最大5連勤・例外なし
 
-      const chosenStaff = pickForSlot(staffPool, slot, need, monthCounts, [], restBonusSet, streak, monthHours);
-      chosenStaff.forEach(e=>{
-        monthCounts[e.id]++; monthHours[e.id]=(monthHours[e.id]||0)+slotHoursCalc(slot);
-        weeklyCounts[weekKey][e.id]=(weeklyCounts[weekKey][e.id]||0)+1; usedToday.add(e.id);
+        const chosenStaff = pickForSlot(staffPool, slot, remaining, monthCounts, already, restBonusSet, streak, monthHours);
+        chosenStaff.forEach(e=>{
+          monthCounts[e.id]++; monthHours[e.id]=(monthHours[e.id]||0)+slotHoursCalc(slot);
+          weeklyCounts[weekKey][e.id]=(weeklyCounts[weekKey][e.id]||0)+1; usedToday.add(e.id);
+        });
+
+        if(!daySh[slot.id]) daySh[slot.id] = [];
+        daySh[slot.id] = [...daySh[slot.id], ...chosenStaff.map(e=>e.id)];
       });
-
-      if(!daySh[slot.id]) daySh[slot.id] = [];
-      daySh[slot.id] = [...daySh[slot.id], ...chosenStaff.map(e=>e.id)];
-    });
+    }
 
     // 連勤カウントの更新: 今日勤務した人は+1、休みだった人は0にリセット
     staffList.forEach(e=>{
