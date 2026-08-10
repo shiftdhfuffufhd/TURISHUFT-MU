@@ -375,7 +375,8 @@ function normalizeEmployee(e){
     return { ...base,
       workableDays: Array.isArray(e.workableDays) ? e.workableDays : DAYS.map(d=>d.key),
       workableShifts: Array.isArray(e.workableShifts) ? e.workableShifts : [],
-      shiftRank: e.shiftRank || {}, nightOk: !!e.nightOk, note: e.note || '' };
+      shiftRank: e.shiftRank || {}, nightOk: !!e.nightOk, note: e.note || '',
+      monthMinDaysOff: (e.monthMinDaysOff!=null) ? e.monthMinDaysOff : null };
   }
   return { ...base,
     paType: e.paType==='regular' ? 'regular' : 'normal',
@@ -548,6 +549,9 @@ function viewEmployees(){
         ${state.nightShiftEnabled ? `<label class="checkRow"><input type="checkbox" id="newEmpNightOk"> ナイト勤務可能</label>` : ''}
         <label>週の勤務日数(目安・任意)</label>
         <input type="number" id="newEmpMax" placeholder="5">
+        <label>月の休み日数(下限の目安・任意)</label>
+        <input type="number" id="newEmpMinOff" placeholder="8">
+        <p class="desc" style="margin:-4px 0 10px;">この日数分の休みを確保できるよう、自動仮作成では出勤日数がこの目安に達したらその社員を配置対象から外します。</p>
         <label>備考(任意)</label>
         <input type="text" id="newEmpNote" placeholder="例: 車通勤のみ可">
       </div>
@@ -660,10 +664,12 @@ async function addEmployee(){
     const p1=document.getElementById('newEmpPref1').value, p2=document.getElementById('newEmpPref2').value, p3=document.getElementById('newEmpPref3').value;
     const shiftRank = buildShiftRankFromSelects(p1,p2,p3);
     const max = document.getElementById('newEmpMax').value;
+    const minOff = document.getElementById('newEmpMinOff').value;
     emp = { id:uid(), name, type, department: document.getElementById('newEmpDept').value,
       workableDays: newEmpDays.slice(), workableShifts: Object.keys(shiftRank), shiftRank,
       nightOk: !!document.getElementById('newEmpNightOk')?.checked,
-      maxPerWeek: max?Number(max):null, note: document.getElementById('newEmpNote').value.trim(), wage:null };
+      maxPerWeek: max?Number(max):null, monthMinDaysOff: minOff?Number(minOff):null,
+      note: document.getElementById('newEmpNote').value.trim(), wage:null };
   }else{
     const paType = document.getElementById('newPaType').value;
     const wage = document.getElementById('newEmpWage').value;
@@ -717,6 +723,9 @@ function staffEditPanel(e){
       ${state.nightShiftEnabled ? `<label class="checkRow"><input type="checkbox" ${e.nightOk?'checked':''} onchange="updateEmpField('${e.id}','nightOk',this.checked,'bool')"> ナイト勤務可能</label>` : ''}
       <label>週の勤務日数(目安)</label>
       <input type="number" value="${e.maxPerWeek??''}" onchange="updateEmpField('${e.id}','maxPerWeek',this.value,'num')">
+      <label>月の休み日数(下限の目安)</label>
+      <input type="number" value="${e.monthMinDaysOff??''}" onchange="updateEmpField('${e.id}','monthMinDaysOff',this.value,'num')">
+      <div class="meta" style="margin:2px 0 8px;">今月(${monthLabel(state.month)})：${empMonthDays(e.id)}日出勤 / ${daysInMonth(state.month)-empMonthDays(e.id)}日休み</div>
       <label>備考</label>
       <input type="text" value="${escapeHtml(e.note)}" onchange="updateEmpField('${e.id}','note',this.value)">
     </div>`;
@@ -1357,6 +1366,7 @@ async function autoGenerateStaff(){
 
       let staffPool = staffList.filter(e=> !usedToday.has(e.id) && isStaffCompatible(e, dateStr, slot));
       staffPool = staffPool.filter(e=> !e.maxPerWeek || (weeklyCounts[weekKey][e.id]||0) < e.maxPerWeek);
+      staffPool = staffPool.filter(e=> !e.monthMinDaysOff || (monthCounts[e.id]||0) < (daysInMonth(state.month) - e.monthMinDaysOff));
       const chosenStaff = pickForSlot(staffPool, slot, need, monthCounts, []);
       chosenStaff.forEach(e=>{ monthCounts[e.id]++; weeklyCounts[weekKey][e.id]=(weeklyCounts[weekKey][e.id]||0)+1; usedToday.add(e.id); });
 
@@ -1438,16 +1448,19 @@ function timelineHtml(dateStr){
 
 function workloadSummaryHtml(){
   if(state.employees.length === 0) return '';
+  const totalDays = daysInMonth(state.month);
   const rows = state.employees.map(e=>{
     const hours = empMonthHours(e.id).toFixed(1);
     const days = empMonthDays(e.id);
+    const off = totalDays - days;
     const badge = e.type==='staff' ? '社員' : (e.paType==='regular'?'レギュラーPA':'通常PA');
+    const offTxt = e.type==='staff' && e.monthMinDaysOff ? `${off}日(目安${e.monthMinDaysOff}日)` : `${off}日`;
     return `<div class="empItem" style="margin-bottom:6px;padding:8px 10px;">
       <div class="topRow"><div class="name" style="font-size:12.5px;">${escapeHtml(e.name)} <span class="typeBadge ${e.type}">${badge}</span></div>
-      <div class="mono" style="font-size:12px;color:var(--navyChip);">${days}日 / ${hours}h</div></div>
+      <div class="mono" style="font-size:12px;color:var(--navyChip);">${days}日出勤 / 休み${offTxt} / ${hours}h</div></div>
     </div>`;
   }).join('');
-  return `<div class="card"><h2><span class="num">状況</span>今月の勤務日数・時間(自動集計)</h2>${rows}</div>`;
+  return `<div class="card"><h2><span class="num">状況</span>今月の勤務日数・休み日数・時間(自動集計)</h2>${rows}</div>`;
 }
 
 function nightRotationHtml(){
