@@ -1464,6 +1464,52 @@ function recentWorkedSlotId(empId, aroundDateStr){
   }
   return null;
 }
+// 不足している枠だけを、休みが下限より多い(まだ余裕がある)社員で埋める。
+// 「必要人数を超えて配置する」ことは絶対にしない(need分までしか埋めない)。
+function fillRemainingShortages(monthCounts, weeklyCounts, monthHours){
+  const dates = buildMonthDates(state.month);
+  const staffList = state.employees.filter(e=>e.type==='staff');
+  let filledCount = 0;
+  dates.forEach(dateStr=>{
+    const dayKey = weekdayKeyOfDate(dateStr);
+    const weekKey = mondayOf(dateStr);
+    if(!state.monthData.shifts[dateStr]) state.monthData.shifts[dateStr] = {};
+    const daySh = state.monthData.shifts[dateStr];
+    const slotsByScarcity = state.shiftSlots.slice().sort((a,b)=>{
+      const countFor = (slot)=>{
+        const usedNow = new Set(Object.values(daySh).flat());
+        return staffList.filter(e=> !usedNow.has(e.id) && isStaffCompatible(e, dateStr, slot)).length;
+      };
+      return countFor(a) - countFor(b);
+    });
+    slotsByScarcity.forEach(slot=>{
+      const need = (state.requiredStaff[dayKey]&&state.requiredStaff[dayKey][slot.id])||0;
+      if(need<=0) return;
+      const currentAssigned = (daySh[slot.id]||[]).filter(id=>{ const e=state.employees.find(x=>x.id===id); return e&&e.type==='staff'; });
+      const short = need - currentAssigned.length;
+      if(short<=0) return; // 既に必要人数を満たしている枠には追加しない
+      const usedToday = new Set(Object.values(daySh).flat());
+      let pool = staffList.filter(e=> !usedToday.has(e.id) && isStaffCompatible(e, dateStr, slot));
+      pool = pool.filter(e=> !e.maxPerWeek || (weeklyCounts[weekKey]?.[e.id]||0) < e.maxPerWeek);
+      pool = pool.filter(e=> !e.monthMinDaysOff || (monthCounts[e.id]||0) < (daysInMonth(state.month) - e.monthMinDaysOff));
+      pool = pool.filter(e=> hasEnoughRestInterval(e.id, dateStr, slot));
+      pool = pool.filter(e=> consecutiveIfWorking(e.id, dateStr) <= MAX_CONSECUTIVE_DAYS);
+      // 休みが下限より多い(勤務日数が少ない=まだ余裕がある)人を優先して埋める
+      const chosen = pickForSlot(pool, slot, short, monthCounts, currentAssigned, null, null, monthHours);
+      chosen.forEach(e=>{
+        if(!daySh[slot.id]) daySh[slot.id] = [];
+        daySh[slot.id].push(e.id);
+        usedToday.add(e.id);
+        monthCounts[e.id] = (monthCounts[e.id]||0)+1;
+        monthHours[e.id] = (monthHours[e.id]||0) + slotHoursCalc(slot);
+        if(!weeklyCounts[weekKey]) weeklyCounts[weekKey] = {};
+        weeklyCounts[weekKey][e.id] = (weeklyCounts[weekKey][e.id]||0)+1;
+        filledCount++;
+      });
+    });
+  });
+  return filledCount;
+}
 // 必要人数を超えて配置されている枠から、不足している枠へ社員を振り分ける(5連勤ルールは例外なし)
 function reallocateSurplusStaff(){
   const dates = buildMonthDates(state.month);
@@ -1629,7 +1675,14 @@ async function autoGenerateStaff(){
       }
     }
 
-    state.shiftSlots.filter(s=>s.id!=='night').forEach(slot=>{
+    // 対応できる候補者が少ない枠(希少な枠)から先に埋める。
+    // 候補者が多い枠を先に埋めてしまうと、希少な枠の候補者を横取りしてしまうため。
+    const normalSlots = state.shiftSlots.filter(s=>s.id!=='night');
+    const slotsByScarcity = normalSlots.slice().sort((a,b)=>{
+      const countFor = (slot)=> staffList.filter(e=> !usedToday.has(e.id) && isStaffCompatible(e, dateStr, slot)).length;
+      return countFor(a) - countFor(b);
+    });
+    slotsByScarcity.forEach(slot=>{
       const need = (state.requiredStaff[dayKey] && state.requiredStaff[dayKey][slot.id]) || 0;
       if(need<=0) return;
 
@@ -1656,9 +1709,11 @@ async function autoGenerateStaff(){
     });
   });
 
-  // 「必要だから入れる。必要なければ休ませる」方針のため、休み日数を埋めるための追加配置・
+  // 「必要だから入れる。必要なければ休ませる」方針のため、必要人数を超えて配置する追加や
   // 余剰の再配分は行わない(通常配置は必要人数ちょうどまでしか行わないため、そもそも余剰は発生しない)。
   // 月の休み日数の下限は、通常配置の候補者フィルタで「下回らないこと」だけを保証する(上限の調整はしない)。
+  // ただし、不足している枠は「休みに余裕がある人」を優先して埋める(必要人数を超えない範囲で)。
+  const filledCount = fillRemainingShortages(monthCounts, weeklyCounts, monthHours);
 
   // 最終防波堤: 途中のロジックに抜け穴があっても、6連勤以上を絶対に残さないよう強制的に取り消す
   const forcedRemovals = enforceConsecutiveLimitHardStop();
@@ -1674,7 +1729,8 @@ async function autoGenerateStaff(){
   if(requiredConflicts.length) warnParts.push(`要出勤の衝突${requiredConflicts.length}件`);
   if(forcedRemovals.length) warnParts.push(`6連勤防止のため強制取消${forcedRemovals.length}件`);
   if(state.duplicateAssignments.length) warnParts.push(`同日重複${state.duplicateAssignments.length}件`);
-  toast(warnParts.length ? `社員シフトを仮作成しました(${warnParts.join('・')}。要確認)` : '社員シフトを仮作成しました(内容を確認・調整してください)');
+  const baseMsg = filledCount>0 ? `社員シフトを仮作成しました(不足枠${filledCount}件を追加で充填)` : '社員シフトを仮作成しました';
+  toast(warnParts.length ? `${baseMsg}(${warnParts.join('・')}。要確認)` : `${baseMsg}(内容を確認・調整してください)`);
 }
 
 // PA(レギュラー・通常どちらも): 出勤可能日・時間に適合した人を全員仮配置(多すぎる場合は管理者が手動で調整する運用)
@@ -1983,7 +2039,7 @@ function viewShift(){
     <div class="card">${monthSwitchHtml()}</div>
     <div class="card">
       <h2><span class="num">①</span>社員の大枠を自動仮作成</h2>
-      <p class="desc">「必要な人数だけを配置し、出勤可能でも必要人数を満たしていれば追加配置しない」方針で仮配置します(あくまで仮案)。部門・希望休(可能な限り)・予定(会議など)・勤務可能曜日/シフト・シフト適正順位・ナイトローテーションを考慮します。<b>最大連勤日数は5日で、要出勤・ナイト・人員不足など、いかなる理由があっても6連勤以上は作成しません。</b>勤務間隔は14時間以上を確保します。5連勤以内・必要人数の範囲で満たせない場合は、無理に埋めず人員不足として表示します。休み日数の下限は「下回らない」ことだけを保証し、それ以上休みが多くても追加配置はしません(休みは異常ではなく正常な状態として扱います)。PAの割り当てには影響しません。再作成時は上書き確認が出ます。従業員を追加・削除した後にもう一度押せば、その内容を反映して作り直せます。</p>
+      <p class="desc">「必要な人数だけを配置し、出勤可能でも必要人数を満たしていれば追加配置しない」方針で仮配置します(あくまで仮案)。部門・希望休(可能な限り)・予定(会議など)・勤務可能曜日/シフト・シフト適正順位・ナイトローテーションを考慮します。<b>最大連勤日数は5日で、要出勤・ナイト・人員不足など、いかなる理由があっても6連勤以上は作成しません。</b>勤務間隔は14時間以上を確保します。対応できる候補者が少ない枠(早番など)ほど優先して先に埋め、候補者が多い枠に人を取られて希少な枠が埋まらなくなるのを防ぎます。まだ不足している枠があれば、休みに余裕がある人(下限より多く休んでいる人)を優先して埋めます(必要人数を超えては配置しません)。それでも5連勤以内・条件を満たす候補がいない場合は、無理に埋めず人員不足として表示します。休み日数の下限は「下回らない」ことだけを保証します(休みは異常ではなく正常な状態として扱います)。PAの割り当てには影響しません。再作成時は上書き確認が出ます。従業員を追加・削除した後にもう一度押せば、その内容を反映して作り直せます。</p>
       <button class="btn btn-navy btn-block" onclick="autoGenerateStaff()">社員シフトを仮作成する</button>
     </div>
     ${nightRotationHtml()}
