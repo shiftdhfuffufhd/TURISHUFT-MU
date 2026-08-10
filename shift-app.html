@@ -231,6 +231,7 @@ let state = {
   consecutiveViolations: [],
   duplicateAssignments: [],
   forcedConsecutiveRemovals: [],
+  overstaffedSlots: [],
   requiredConsecutiveConflicts: [],
   loaded: false
 };
@@ -540,7 +541,7 @@ function viewEmployees(){
         <input type="number" id="newEmpMax" placeholder="5">
         <label>月の休み日数(下限・任意)</label>
         <input type="number" id="newEmpMinOff" placeholder="8">
-        <p class="desc" style="margin:-4px 0 10px;">自動仮作成では、この休み日数を必ず確保します(出勤日数がこの日数を超えたら、必要人数を満たせなくてもその社員は配置対象から外れます)。ナイトのローテーションにも適用されます。</p>
+        <p class="desc" style="margin:-4px 0 10px;">自動仮作成では、この休み日数を下回らないようにします(出勤日数がこの日数を超えたら、必要人数を満たせなくてもその社員は配置対象から外れます)。これ以上休みが多くなっても、埋めるための追加配置はしません。ナイトのローテーションにも適用されます。</p>
         <label>備考(任意)</label>
         <input type="text" id="newEmpNote" placeholder="例: 車通勤のみ可">
       </div>
@@ -704,7 +705,7 @@ function staffEditPanel(e){
       <input type="number" value="${e.maxPerWeek??''}" onchange="updateEmpField('${e.id}','maxPerWeek',this.value,'num')">
       <label>月の休み日数(下限・厳守)</label>
       <input type="number" value="${e.monthMinDaysOff??''}" onchange="updateEmpField('${e.id}','monthMinDaysOff',this.value,'num')">
-      <p class="desc" style="margin:2px 0 8px;">自動仮作成ではこの日数を必ず確保します(超えたら配置対象から外れます)。</p>
+      <p class="desc" style="margin:2px 0 8px;">自動仮作成ではこの日数を下回らないようにします(超えたら配置対象から外れます)。それ以上休みが多くても追加配置はしません。</p>
       <div class="meta" style="margin:2px 0 8px;">今月(${monthLabel(state.month)})：${empMonthDays(e.id)}日出勤 / ${daysInMonth(state.month)-empMonthDays(e.id)}日休み</div>
       <label>備考</label>
       <input type="text" value="${escapeHtml(e.note)}" onchange="updateEmpField('${e.id}','note',this.value)">
@@ -1333,6 +1334,21 @@ function computeDuplicateAssignments(){
   });
   return violations;
 }
+// 通常勤務で、必要人数を超えて社員が配置されていないか検出する(検知のみ・自動修正はしない)。
+// 要出勤(確定予定)による上乗せは別枠として許可されるため、ここでは目安の検知として扱う。
+function computeOverstaffedSlots(){
+  const dates = buildMonthDates(state.month);
+  const violations = [];
+  dates.forEach(dateStr=>{
+    const dayKey = weekdayKeyOfDate(dateStr);
+    state.shiftSlots.forEach(slot=>{
+      const need = (state.requiredStaff[dayKey]&&state.requiredStaff[dayKey][slot.id])||0;
+      const assigned = getAssigned(dateStr, slot.id).filter(id=>{ const e=state.employees.find(x=>x.id===id); return e&&e.type==='staff'; });
+      if(need>0 && assigned.length > need) violations.push({dateStr, slot, need, current:assigned.length});
+    });
+  });
+  return violations;
+}
 // 現時点で全従業員の連勤日数が5日以内に収まっているか、月全体を最終チェックする(検知のみ・自動修正はしない)
 function computeConsecutiveViolations(){
   const dates = buildMonthDates(state.month);
@@ -1410,7 +1426,7 @@ function rebalanceStaffDaysOff(monthCounts, weeklyCounts){
   staffList.forEach(under=> tryFill(under));
 }
 
-const MIN_REST_HOURS = 12;
+const MIN_REST_HOURS = 14;
 // 前日・翌日の勤務と比べて、勤務間インターバル(休息時間)が確保できるか判定
 function hasEnoughRestInterval(empId, targetDateStr, targetSlot){
   const prevDate = addDaysToDateStr(targetDateStr, -1);
@@ -1620,7 +1636,7 @@ async function autoGenerateStaff(){
       let staffPool = staffList.filter(e=> !usedToday.has(e.id) && isStaffCompatible(e, dateStr, slot));
       staffPool = staffPool.filter(e=> !e.maxPerWeek || (weeklyCounts[weekKey][e.id]||0) < e.maxPerWeek);
       staffPool = staffPool.filter(e=> !e.monthMinDaysOff || (monthCounts[e.id]||0) < (daysInMonth(state.month) - e.monthMinDaysOff));
-      staffPool = staffPool.filter(e=> hasEnoughRestInterval(e.id, dateStr, slot)); // 勤務間隔12時間以上
+      staffPool = staffPool.filter(e=> hasEnoughRestInterval(e.id, dateStr, slot)); // 勤務間隔14時間以上
       staffPool = staffPool.filter(e=> (streak[e.id]||0) < MAX_CONSECUTIVE_DAYS); // 最大5連勤・例外なし
 
       const chosenStaff = pickForSlot(staffPool, slot, need, monthCounts, [], restBonusSet, streak, monthHours);
@@ -1640,17 +1656,17 @@ async function autoGenerateStaff(){
     });
   });
 
-  // 休み日数のバランス調整(下限+1日以内を目標に、休みが多すぎる人を他の枠へ追加。5連勤ルールは例外なし)
-  rebalanceStaffDaysOff(monthCounts, weeklyCounts);
-  // 必要人数を超えている枠から、不足している枠へ社員を振り分ける(勤務間隔・5連勤ルールを守った上で)
-  reallocateSurplusStaff();
+  // 「必要だから入れる。必要なければ休ませる」方針のため、休み日数を埋めるための追加配置・
+  // 余剰の再配分は行わない(通常配置は必要人数ちょうどまでしか行わないため、そもそも余剰は発生しない)。
+  // 月の休み日数の下限は、通常配置の候補者フィルタで「下回らないこと」だけを保証する(上限の調整はしない)。
 
   // 最終防波堤: 途中のロジックに抜け穴があっても、6連勤以上を絶対に残さないよう強制的に取り消す
   const forcedRemovals = enforceConsecutiveLimitHardStop();
   state.forcedConsecutiveRemovals = forcedRemovals;
-  // 最終チェック: 同日重複が生じていないか検知して記録(検知のみ・自動修正はしない)
+  // 最終チェック: 同日重複・過剰配置が生じていないか検知して記録(検知のみ・自動修正はしない)
   state.consecutiveViolations = computeConsecutiveViolations();
   state.duplicateAssignments = computeDuplicateAssignments();
+  state.overstaffedSlots = computeOverstaffedSlots();
   state.requiredConsecutiveConflicts = requiredConflicts;
 
   await saveMonth(); render();
@@ -1813,7 +1829,7 @@ function nightRotationHtml(){
       <div><select onchange="setNightRotation('${bk}', this.value)">${options || '<option value="">ナイト可の社員なし</option>'}</select></div></div>`;
   }).join('');
   return `<div class="card"><h2><span class="num">ナイト</span>5連勤単位ローテーション(社員基準)</h2>
-    <p class="desc">月初から5日ずつのブロックで主担当を自動割り当て(暦週とは無関係)。手動変更も可能。当日希望休などで担当できない日や、最大5連勤を超えてしまう日だけ、勤務負担・過去のナイト担当回数が少ない社員に自動的に振り替えます(その場合も最大5連勤・勤務間隔12時間は必ず守ります)。</p>
+    <p class="desc">月初から5日ずつのブロックで主担当を自動割り当て(暦週とは無関係)。手動変更も可能。当日希望休などで担当できない日や、最大5連勤を超えてしまう日だけ、勤務負担・過去のナイト担当回数が少ない社員に自動的に振り替えます(その場合も最大5連勤・勤務間隔14時間は必ず守ります)。</p>
     ${rows || '<div class="empty">ナイト可能な社員がいません</div>'}</div>`;
 }
 
@@ -1895,6 +1911,14 @@ function viewShift(){
       ${forcedRemovals.map(w=>`<div class="deptWarnItem">${escapeHtml(w.emp.name)}：${formatSlashDate(w.dateStr)}の勤務を取消(6連勤目だったため)</div>`).join('')}
     </div>` : '';
 
+  const overstaffedSlots = state.overstaffedSlots || [];
+  const overstaffedHtml = overstaffedSlots.length ? `
+    <div class="card deptWarnCard">
+      <h2 style="color:#7a5410;"><span class="num" style="background:#f3dfb3;color:#7a5410;">過剰配置</span>必要人数を超えている枠</h2>
+      <p class="desc">以下の枠は必要人数より社員が多く配置されています。要出勤(確定予定)による上乗せであれば問題ありませんが、そうでなければ手動で調整してください。</p>
+      ${overstaffedSlots.map(w=>`<div class="deptWarnItem">${formatSlashDate(w.dateStr)} ${escapeHtml(w.slot.name)}　必要${w.need}人／現在${w.current}人</div>`).join('')}
+    </div>` : '';
+
   const dates = buildMonthDates(state.month);
   const filter = state.shiftViewFilter;
 
@@ -1959,7 +1983,7 @@ function viewShift(){
     <div class="card">${monthSwitchHtml()}</div>
     <div class="card">
       <h2><span class="num">①</span>社員の大枠を自動仮作成</h2>
-      <p class="desc">部門・希望休(可能な限り)・予定(会議など)・勤務可能曜日/シフト・シフト適正順位・ナイトローテーションを考慮して仮配置します(あくまで仮案)。<b>最大連勤日数は5日で、要出勤・ナイト・人員不足・休み調整など、いかなる理由があっても6連勤以上は作成しません。</b>5連勤以内で必要人数を満たせない場合は、無理に埋めず人員不足として表示します。勤務間隔は12時間以上を確保し、必要人数を超えている枠があれば不足している枠へ振り分けます(時間帯パターンが変わる異動は最終手段)。休み日数の下限を設定している社員は、下限+1日以内に収まるよう調整します。PAの割り当てには影響しません。再作成時は上書き確認が出ます。従業員を追加・削除した後にもう一度押せば、その内容を反映して作り直せます。</p>
+      <p class="desc">「必要な人数だけを配置し、出勤可能でも必要人数を満たしていれば追加配置しない」方針で仮配置します(あくまで仮案)。部門・希望休(可能な限り)・予定(会議など)・勤務可能曜日/シフト・シフト適正順位・ナイトローテーションを考慮します。<b>最大連勤日数は5日で、要出勤・ナイト・人員不足など、いかなる理由があっても6連勤以上は作成しません。</b>勤務間隔は14時間以上を確保します。5連勤以内・必要人数の範囲で満たせない場合は、無理に埋めず人員不足として表示します。休み日数の下限は「下回らない」ことだけを保証し、それ以上休みが多くても追加配置はしません(休みは異常ではなく正常な状態として扱います)。PAの割り当てには影響しません。再作成時は上書き確認が出ます。従業員を追加・削除した後にもう一度押せば、その内容を反映して作り直せます。</p>
       <button class="btn btn-navy btn-block" onclick="autoGenerateStaff()">社員シフトを仮作成する</button>
     </div>
     ${nightRotationHtml()}
@@ -1975,6 +1999,7 @@ function viewShift(){
     ${consecutiveViolationHtml}
     ${duplicateAssignmentHtml}
     ${forcedRemovalHtml}
+    ${overstaffedHtml}
     <div class="card">
       <h2><span class="num">③</span>最終確認・手動調整</h2>
       <p class="desc">名前をタップすると割り当て/解除を切り替えられます。変更するたびに必要人数・不足・部門・勤務時間は自動再計算されます。</p>
