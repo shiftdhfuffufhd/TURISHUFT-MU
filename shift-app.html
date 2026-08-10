@@ -1326,9 +1326,12 @@ async function autoAssignAllPa(){
   const dates = buildMonthDates(state.month);
   const paList = state.employees.filter(e=>e.type==='pa');
   if(!state.monthData.shifts) state.monthData.shifts = {};
+  const weeklyCounts = {};
   let addedCount = 0;
 
   dates.forEach(dateStr=>{
+    const weekKey = mondayOf(dateStr);
+    if(!weeklyCounts[weekKey]) weeklyCounts[weekKey] = {};
     if(!state.monthData.shifts[dateStr]) state.monthData.shifts[dateStr] = {};
     const daySh = state.monthData.shifts[dateStr];
 
@@ -1345,12 +1348,15 @@ async function autoAssignAllPa(){
 
     const usedToday = new Set(Object.values(daySh).flat());
     visibleSlots().forEach(slot=>{
-      // PA希望休(出勤不可)は最優先で除外。paMatchType内で希望休/出勤可否/時間の完全一致を判定
-      const candidates = paList.filter(e=> !usedToday.has(e.id) && paMatchType(e, dateStr, slot)==='full');
+      // PA希望休(出勤不可)は最優先で除外。時間が一部でも重なっていれば候補にする(完全一致でなくてもOK)
+      let candidates = paList.filter(e=> !usedToday.has(e.id) && !!paMatchType(e, dateStr, slot));
+      // 週の出勤日数目安を上限として考慮する
+      candidates = candidates.filter(e=> !e.maxPerWeek || (weeklyCounts[weekKey][e.id]||0) < e.maxPerWeek);
       if(candidates.length===0) return;
       if(!daySh[slot.id]) daySh[slot.id] = [];
       candidates.forEach(e=>{
         daySh[slot.id].push(e.id); usedToday.add(e.id); addedCount++;
+        weeklyCounts[weekKey][e.id] = (weeklyCounts[weekKey][e.id]||0)+1;
       });
     });
   });
@@ -1570,7 +1576,7 @@ function viewShift(){
     ${nightRotationHtml()}
     <div class="card">
       <h2><span class="num">②</span>PAを全員仮配置</h2>
-      <p class="desc">出勤可能日・時間がその枠に完全に一致するPAを全員シフトに入れます(ナイト不可のPAはナイト枠、ナイト専門のPAはナイト以外の枠には出ません)。PAの希望休は最優先で守られ、絶対に配置されません。押すたびに一度リセットして作り直すので、手動で調整した内容は消えます(既存の配置がある場合は確認画面が出ます)。多すぎる場合は下の一覧から手動で外してください。</p>
+      <p class="desc">出勤可能な時間が少しでも重なるPAを、その枠に全員シフトに入れます(枠を完全にカバーできなくてもOK。実際の勤務時間はシフト作成画面でタップして個別に調整できます)。ナイト不可のPAはナイト枠、ナイト専門のPAはナイト以外の枠には出ません。週の出勤日数目安を超えないようにします。PAの希望休は最優先で守られ、絶対に配置されません。押すたびに一度リセットして作り直すので、手動で調整した内容は消えます(既存の配置がある場合は確認画面が出ます)。多すぎる場合は下の一覧から手動で外してください。</p>
       <button class="btn btn-primary btn-block" onclick="autoAssignAllPa()">PAを全員仮配置する</button>
     </div>
     ${shortHtml}
