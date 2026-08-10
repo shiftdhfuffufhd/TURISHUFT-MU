@@ -1268,6 +1268,24 @@ function consecutiveWorkedBefore(empId, dateStr){
   }
   return count;
 }
+// dateStrに勤務した場合、前後を合わせて何日連続勤務になるか(dateStr自身を含む)を判定
+function consecutiveIfWorking(empId, dateStr){
+  let back = 0;
+  for(let i=1;i<=10;i++){
+    const d = addDaysToDateStr(dateStr, -i);
+    const sh = state.monthData.shifts[d];
+    if(sh && Object.values(sh).some(arr=>(arr||[]).includes(empId))) back++;
+    else break;
+  }
+  let fwd = 0;
+  for(let i=1;i<=10;i++){
+    const d = addDaysToDateStr(dateStr, i);
+    const sh = state.monthData.shifts[d];
+    if(sh && Object.values(sh).some(arr=>(arr||[]).includes(empId))) fwd++;
+    else break;
+  }
+  return back + 1 + fwd;
+}
 // 休み日数の下限を超えて休みすぎている社員を、他の枠へ追加で組み込みバランスを取る。
 // まず週1日休日を守れる範囲で調整し、それでも無理な場合のみ6連勤を許容する。
 function rebalanceStaffDaysOff(monthCounts, weeklyCounts){
@@ -1285,7 +1303,7 @@ function rebalanceStaffDaysOff(monthCounts, weeklyCounts){
       const usedToday = new Set(Object.values(daySh).flat());
       if(usedToday.has(under.id)) continue;
       if(under.maxPerWeek && (weeklyCounts[weekKey]?.[under.id]||0) >= under.maxPerWeek) continue;
-      if(!allowRelax && consecutiveWorkedBefore(under.id, dateStr) >= 6) continue;
+      if(!allowRelax && consecutiveIfWorking(under.id, dateStr) > 6) continue;
       const slot = state.shiftSlots.find(s=> (s.id!=='night'||state.nightShiftEnabled) && isStaffCompatible(under, dateStr, s));
       if(!slot) continue;
       if(!daySh[slot.id]) daySh[slot.id] = [];
@@ -1370,7 +1388,9 @@ function reallocateSurplusStaff(){
           const e = state.employees.find(x=>x.id===id);
           if(!e) return false;
           if(!isStaffCompatible(e, sh.dateStr, sh.slot)) return false; // 本人の希望シフトに含まれない時間帯には割り振らない
-          return hasEnoughRestInterval(id, sh.dateStr, sh.slot);
+          if(!hasEnoughRestInterval(id, sh.dateStr, sh.slot)) return false;
+          if(consecutiveIfWorking(id, sh.dateStr) > 6) return false; // 週1日休日を確保できない異動はしない
+          return true;
         });
         if(candidates.length===0) continue;
         // 時間帯パターンを維持できる人を優先(パターンが変わる異動は最終手段)
