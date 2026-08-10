@@ -364,8 +364,9 @@ async function loadAll(){
   render();
 }
 function normalizeEmployee(e){
+  const departments = Array.isArray(e.departments) ? e.departments : (e.department ? [e.department] : []);
   const base = { id:e.id, name:e.name, type: e.type==='staff'?'staff':'pa',
-    wage: e.wage||null, maxPerWeek: e.maxPerWeek||null, department: e.department||null };
+    wage: e.wage||null, maxPerWeek: e.maxPerWeek||null, departments };
   if(base.type==='staff'){
     return { ...base,
       workableDays: Array.isArray(e.workableDays) ? e.workableDays : DAYS.map(d=>d.key),
@@ -466,24 +467,26 @@ function viewHome(){
 }
 
 // ---------- 従業員管理 ----------
+function deptListTxt(e){
+  return (e.departments && e.departments.length) ? e.departments.map(d=>DEPT_LABEL[d]).join('・') : '未設定';
+}
 function staffSummary(e){
   const days = e.workableDays.map(k=> DAYS.find(d=>d.key===k)?.label || '').join('');
   const ranked = nonNightSlots().filter(s=> e.workableShifts.includes(s.id))
     .sort((a,b)=> (e.shiftRank[a.id]||99)-(e.shiftRank[b.id]||99))
     .map(s=> `第${e.shiftRank[s.id]||'-'}希望:${s.name}`).join(' ');
-  return `部門:${e.department?DEPT_LABEL[e.department]:'未設定'} ・ 曜日:${days||'なし'} ・ ${ranked||'勤務可能シフト未設定'}${state.nightShiftEnabled ? ` ・ ナイト:${e.nightOk?'可':'不可'}` : ''}`;
+  return `部門:${deptListTxt(e)} ・ 曜日:${days||'なし'} ・ ${ranked||'勤務可能シフト未設定'}${state.nightShiftEnabled ? ` ・ ナイト:${e.nightOk?'可':'不可'}` : ''}`;
 }
 function paSummary(e){
-  const deptTxt = e.department ? DEPT_LABEL[e.department] : '特になし';
   const wageTxt = e.wage ? `時給${e.wage}円` : '時給未設定';
   const timeTxt = (e.baseTime && e.baseTime.start && e.baseTime.end) ? `基本${e.baseTime.start}〜${e.baseTime.end}` : '基本時間未設定';
   const nightTxt = state.nightShiftEnabled ? ` ・ ナイト:${NIGHT_AVAIL_LABEL[e.nightAvail||'no']}` : '';
-  return `部門:${deptTxt} ・ ${wageTxt} ・ 週${e.maxPerWeek||'制限なし'}日目安 ・ ${timeTxt}${nightTxt}`;
+  return `部門:${deptListTxt(e)} ・ ${wageTxt} ・ 週${e.maxPerWeek||'制限なし'}日目安 ・ ${timeTxt}${nightTxt}`;
 }
 function viewEmployees(){
   const list = state.employees.map(e=>{
     const badge = e.type==='staff' ? `<span class="typeBadge staff">社員</span>` : `<span class="typeBadge pa">PA</span>`;
-    const deptBadge = e.department ? `<span class="deptBadge">${DEPT_LABEL[e.department]}</span>` : '';
+    const deptBadge = (e.departments||[]).map(d=>`<span class="deptBadge">${DEPT_LABEL[d]}</span>`).join('');
     const metaLine = e.type==='staff' ? staffSummary(e) + (e.maxPerWeek?` ・ 週${e.maxPerWeek}日目安`:'') : paSummary(e);
     const open = !!state.empEditOpen[e.id];
     return `
@@ -517,11 +520,11 @@ function viewEmployees(){
       <input type="text" id="newEmpName" placeholder="例: 山田 太郎">
 
       <div id="newStaffFields">
-        <label>所属部門</label>
-        <div class="segToggle" id="newEmpDeptToggle">
-          ${DEPTS.map((d,i)=>`<button class="${i===0?'active':''}" data-dept="${d.key}" onclick="setNewEmpDept('${d.key}')">${d.label}</button>`).join('')}
+        <label>所属部門(複数選択可)</label>
+        <div class="dayChecks" id="newEmpDeptToggle">
+          ${DEPTS.map(d=>`<div class="dayChip" data-dept="${d.key}" onclick="toggleNewEmpDept('${d.key}')">${d.label}</div>`).join('')}
         </div>
-        <input type="hidden" id="newEmpDept" value="${DEPTS[0].key}">
+        <p class="desc" style="margin:-4px 0 10px;">冬季など人手が足りない時に、他部門のスタッフが代わりに担当することも考えられる場合は、複数選んでおくと自動仮作成で柔軟に対応できます。</p>
         <label>勤務可能曜日</label>
         <div class="dayChecks" id="newEmpDays">
           ${DAYS.map(d=>`<div class="dayChip on" data-day="${d.key}" onclick="toggleNewEmpDay('${d.key}')">${d.label}</div>`).join('')}
@@ -539,8 +542,10 @@ function viewEmployees(){
       </div>
 
       <div id="newPaFields" style="display:none;">
-        <label>所属部門</label>
-        <select id="newPaDept"><option value="">特になし</option>${DEPTS.map(d=>`<option value="${d.key}">${d.label}</option>`).join('')}</select>
+        <label>所属部門(複数選択可)</label>
+        <div class="dayChecks" id="newPaDeptToggle">
+          ${DEPTS.map(d=>`<div class="dayChip" data-dept="${d.key}" onclick="toggleNewPaDept('${d.key}')">${d.label}</div>`).join('')}
+        </div>
         <div class="row">
           <div><label>時給(円・任意)</label><input type="number" id="newEmpWage" placeholder="1100"></div>
           <div><label>週の出勤日数目安(任意)</label><input type="number" id="newEmpMaxPa" placeholder="3"></div>
@@ -566,6 +571,8 @@ function viewEmployees(){
     </div>`;
 }
 let newEmpDays = DAYS.map(d=>d.key);
+let newEmpDepts = [];
+let newPaDepts = [];
 function setNewEmpType(t){
   document.getElementById('newEmpType').value = t;
   document.getElementById('newEmpTypeStaffBtn').classList.toggle('active', t==='staff');
@@ -573,9 +580,17 @@ function setNewEmpType(t){
   document.getElementById('newStaffFields').style.display = (t==='staff') ? '' : 'none';
   document.getElementById('newPaFields').style.display = (t==='pa') ? '' : 'none';
 }
-function setNewEmpDept(key){
-  document.getElementById('newEmpDept').value = key;
-  document.querySelectorAll('#newEmpDeptToggle button').forEach(b=> b.classList.toggle('active', b.dataset.dept===key));
+function toggleNewEmpDept(key){
+  const idx = newEmpDepts.indexOf(key);
+  if(idx===-1) newEmpDepts.push(key); else newEmpDepts.splice(idx,1);
+  const el = document.querySelector(`#newEmpDeptToggle .dayChip[data-dept="${key}"]`);
+  if(el) el.classList.toggle('on');
+}
+function toggleNewPaDept(key){
+  const idx = newPaDepts.indexOf(key);
+  if(idx===-1) newPaDepts.push(key); else newPaDepts.splice(idx,1);
+  const el = document.querySelector(`#newPaDeptToggle .dayChip[data-dept="${key}"]`);
+  if(el) el.classList.toggle('on');
 }
 function setNewPaNightAvail(val){
   document.getElementById('newPaNightAvail').value = val;
@@ -638,7 +653,7 @@ async function addEmployee(){
     const shiftRank = buildShiftRankFromValues(prefVals);
     const max = document.getElementById('newEmpMax').value;
     const minOff = document.getElementById('newEmpMinOff').value;
-    emp = { id:uid(), name, type, department: document.getElementById('newEmpDept').value,
+    emp = { id:uid(), name, type, departments: newEmpDepts.slice(),
       workableDays: newEmpDays.slice(), workableShifts: Object.keys(shiftRank), shiftRank,
       nightOk: !!document.getElementById('newEmpNightOk')?.checked,
       maxPerWeek: max?Number(max):null, monthMinDaysOff: minOff?Number(minOff):null,
@@ -646,16 +661,16 @@ async function addEmployee(){
   }else{
     const wage = document.getElementById('newEmpWage').value;
     const max = document.getElementById('newEmpMaxPa').value;
-    const dept = document.getElementById('newPaDept').value || null;
     const baseStart = document.getElementById('newPaBaseStart').value;
     const baseEnd = document.getElementById('newPaBaseEnd').value;
     const nightAvail = document.getElementById('newPaNightAvail')?.value || 'no';
-    emp = { id:uid(), name, type:'pa', department: dept,
+    emp = { id:uid(), name, type:'pa', departments: newPaDepts.slice(),
       wage: wage?Number(wage):null, maxPerWeek: max?Number(max):null,
       baseTime: {start:baseStart||'', end:baseEnd||''}, nightAvail };
   }
   state.employees.push(emp);
   newEmpDays = DAYS.map(d=>d.key);
+  newEmpDepts = []; newPaDepts = [];
   await saveSettings(); render(); toast('従業員を追加しました');
 }
 async function removeEmployee(id){
@@ -669,10 +684,11 @@ function staffEditPanel(e){
     <div class="staffPanel">
       <div class="miniTitle">名前</div>
       <input type="text" value="${escapeHtml(e.name)}" onchange="updateEmpField('${e.id}','name',this.value)">
-      <div class="miniTitle">所属部門</div>
-      <div class="segToggle">
-        ${DEPTS.map(d=>`<button class="${e.department===d.key?'active':''}" onclick="updateEmpDept('${e.id}','${d.key}')">${d.label}</button>`).join('')}
+      <div class="miniTitle">所属部門(複数選択可)</div>
+      <div class="dayChecks">
+        ${DEPTS.map(d=>`<div class="dayChip ${(e.departments||[]).includes(d.key)?'on':''}" onclick="toggleEmpDept('${e.id}','${d.key}')">${d.label}</div>`).join('')}
       </div>
+      <p class="desc" style="margin:-4px 0 10px;">冬季など人手不足の時に、他部門のスタッフが代わりに担当することも考えられる場合は、複数選んでおくと自動仮作成で柔軟に対応できます。</p>
       <div class="miniTitle">勤務可能曜日</div>
       <div class="dayChecks">
         ${DAYS.map(d=>`<div class="dayChip ${e.workableDays.includes(d.key)?'on':''}" onclick="toggleStaffDay('${e.id}','${d.key}')">${d.label}</div>`).join('')}
@@ -696,10 +712,9 @@ function paEditPanel(e){
     <div class="staffPanel">
       <div class="miniTitle">名前</div>
       <input type="text" value="${escapeHtml(e.name)}" onchange="updateEmpField('${e.id}','name',this.value)">
-      <div class="miniTitle">所属部門</div>
-      <div class="segToggle">
-        <button class="${!e.department?'active':''}" onclick="updateEmpDept('${e.id}','')">特になし</button>
-        ${DEPTS.map(d=>`<button class="${e.department===d.key?'active':''}" onclick="updateEmpDept('${e.id}','${d.key}')">${d.label}</button>`).join('')}
+      <div class="miniTitle">所属部門(複数選択可)</div>
+      <div class="dayChecks">
+        ${DEPTS.map(d=>`<div class="dayChip ${(e.departments||[]).includes(d.key)?'on':''}" onclick="toggleEmpDept('${e.id}','${d.key}')">${d.label}</div>`).join('')}
       </div>
       <div class="miniTitle">基本勤務時間(一括設定)</div>
       <div class="row">
@@ -725,9 +740,12 @@ function paEditPanel(e){
       <div class="meta">${empMonthDays(e.id)}日 ・ ${empMonthHours(e.id).toFixed(1)}時間</div>
     </div>`;
 }
-async function updateEmpDept(empId, dept){
+async function toggleEmpDept(empId, dept){
   const e = state.employees.find(x=>x.id===empId); if(!e) return;
-  e.department = dept || null; await saveSettings(); render();
+  if(!e.departments) e.departments = [];
+  const idx = e.departments.indexOf(dept);
+  if(idx===-1) e.departments.push(dept); else e.departments.splice(idx,1);
+  await saveSettings(); render();
 }
 async function toggleStaffDay(empId, dayKey){
   const e = state.employees.find(x=>x.id===empId); if(!e) return;
@@ -1138,8 +1156,8 @@ function computeShortages(){
 function computeDeptShortage(dateStr, slot, assignedIds){
   const req = slot.id==='early' ? ['bait'] : (slot.id==='late' ? ['bait','lure','tackle'] : []);
   if(req.length===0) return [];
-  const depts = assignedIds.map(id=>{ const e=state.employees.find(x=>x.id===id); return e&&e.department; });
-  return req.filter(d=> !depts.includes(d));
+  const covered = assignedIds.flatMap(id=>{ const e=state.employees.find(x=>x.id===id); return (e&&e.departments)||[]; });
+  return req.filter(d=> !covered.includes(d));
 }
 function computeDeptWarningsList(){
   const dates = buildMonthDates(state.month);
@@ -1181,6 +1199,16 @@ async function toggleAssign(empId, dateStr, slotId){
   Object.keys(daySh).forEach(sid=>{ daySh[sid] = (daySh[sid]||[]).filter(id=>id!==empId); });
   if(!wasInThisSlot){
     daySh[slotId].push(empId);
+    // PAを手動で追加した場合も、枠の規定時間ではなく本人の設定時間を初期値にする
+    const emp = state.employees.find(x=>x.id===empId);
+    if(emp && emp.type==='pa'){
+      const st = paEffectiveStatus(empId, dateStr);
+      if(st.rangeStart && st.rangeEnd){
+        if(!state.monthData.timeOverrides) state.monthData.timeOverrides = {};
+        if(!state.monthData.timeOverrides[dateStr]) state.monthData.timeOverrides[dateStr] = {};
+        state.monthData.timeOverrides[dateStr][empId] = {start: st.rangeStart, end: st.rangeEnd};
+      }
+    }
   }else{
     // 割り当てを外した場合、その日の個別時間の上書きも一緒に削除する
     if(state.monthData.timeOverrides && state.monthData.timeOverrides[dateStr]) delete state.monthData.timeOverrides[dateStr][empId];
@@ -1228,11 +1256,11 @@ function nightPersonForDate(dateStr, monthCounts){
 function pickForSlot(pool, slot, need, monthCounts, alreadyChosenIds){
   if(need<=0) return [];
   const deptReq = slot.id==='early' ? ['bait'] : (slot.id==='late' ? ['bait','lure','tackle'] : []);
-  const alreadyDepts = alreadyChosenIds.map(id=>{ const e=state.employees.find(x=>x.id===id); return e&&e.department; });
+  const alreadyDepts = alreadyChosenIds.flatMap(id=>{ const e=state.employees.find(x=>x.id===id); return (e&&e.departments)||[]; });
   let chosen = [];
   deptReq.filter(d=>!alreadyDepts.includes(d)).forEach(dept=>{
     if(chosen.length>=need) return;
-    const cand = pool.filter(e=> e.department===dept && !chosen.includes(e))
+    const cand = pool.filter(e=> (e.departments||[]).includes(dept) && !chosen.includes(e))
       .sort((a,b)=> (a.shiftRank[slot.id]||99)-(b.shiftRank[slot.id]||99) || monthCounts[a.id]-monthCounts[b.id]);
     if(cand[0]) chosen.push(cand[0]);
   });
@@ -1357,6 +1385,13 @@ async function autoAssignAllPa(){
       candidates.forEach(e=>{
         daySh[slot.id].push(e.id); usedToday.add(e.id); addedCount++;
         weeklyCounts[weekKey][e.id] = (weeklyCounts[weekKey][e.id]||0)+1;
+        // スロットの規定時間ではなく、本人の基本時間/個別設定した時間をそのまま実際の勤務時間にする
+        const st = paEffectiveStatus(e.id, dateStr);
+        if(st.rangeStart && st.rangeEnd){
+          if(!state.monthData.timeOverrides) state.monthData.timeOverrides = {};
+          if(!state.monthData.timeOverrides[dateStr]) state.monthData.timeOverrides[dateStr] = {};
+          state.monthData.timeOverrides[dateStr][e.id] = {start: st.rangeStart, end: st.rangeEnd};
+        }
       });
     });
   });
@@ -1538,7 +1573,7 @@ function viewShift(){
           const isAssigned = assigned.includes(e.id);
           const st = paEffectiveStatus(e.id, dateStr);
           const timeTxt = st.rangeStart&&st.rangeEnd ? `(${st.rangeStart}〜${st.rangeEnd})` : '';
-          const deptTxt = e.department ? `[${DEPT_LABEL[e.department]}]` : '';
+          const deptTxt = (e.departments&&e.departments.length) ? `[${e.departments.map(d=>DEPT_LABEL[d]).join('・')}]` : '';
           return `<div class="chip ${isAssigned?'assignedPa':(tag?'partial':'avail')}" onclick="toggleAssign('${e.id}','${dateStr}','${slot.id}')">${escapeHtml(e.name)}${deptTxt}${timeTxt}${tag}</div>`;
         };
         const fullChips = full.map(e=>chip(e,'')).join('') || `<span style="font-size:12px;color:var(--sub)">候補なし</span>`;
