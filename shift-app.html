@@ -213,6 +213,7 @@ const DEPTS = [
   {key:'bait', label:'エサ'}, {key:'lure', label:'ルアー'}, {key:'tackle', label:'釣具'}
 ];
 const DEPT_LABEL = {bait:'エサ', lure:'ルアー', tackle:'釣具'};
+const NIGHT_AVAIL_LABEL = {no:'不可', yes:'可', specialist:'専門'};
 
 let state = {
   tab: 'home',
@@ -373,7 +374,8 @@ function normalizeEmployee(e){
       monthMinDaysOff: (e.monthMinDaysOff!=null) ? e.monthMinDaysOff : null };
   }
   return { ...base,
-    baseTime: e.baseTime || {start:'', end:''} };
+    baseTime: e.baseTime || {start:'', end:''},
+    nightAvail: ['no','yes','specialist'].includes(e.nightAvail) ? e.nightAvail : 'no' };
 }
 async function saveSettings(){
   try{
@@ -475,7 +477,8 @@ function paSummary(e){
   const deptTxt = e.department ? DEPT_LABEL[e.department] : '特になし';
   const wageTxt = e.wage ? `時給${e.wage}円` : '時給未設定';
   const timeTxt = (e.baseTime && e.baseTime.start && e.baseTime.end) ? `基本${e.baseTime.start}〜${e.baseTime.end}` : '基本時間未設定';
-  return `部門:${deptTxt} ・ ${wageTxt} ・ 週${e.maxPerWeek||'制限なし'}日目安 ・ ${timeTxt}`;
+  const nightTxt = state.nightShiftEnabled ? ` ・ ナイト:${NIGHT_AVAIL_LABEL[e.nightAvail||'no']}` : '';
+  return `部門:${deptTxt} ・ ${wageTxt} ・ 週${e.maxPerWeek||'制限なし'}日目安 ・ ${timeTxt}${nightTxt}`;
 }
 function viewEmployees(){
   const list = state.employees.map(e=>{
@@ -548,6 +551,16 @@ function viewEmployees(){
           <div><label>終了</label><input type="time" id="newPaBaseEnd"></div>
         </div>
         <p class="desc" style="margin:-4px 0 10px;">ここで設定した時間が、毎日の基本の出勤可能時間になります。休みの日は「PA希望シフト」タブで希望休として登録し、特定の日だけ時間を変えたい場合はそこの個別設定で調整してください。</p>
+        ${state.nightShiftEnabled ? `
+        <label>ナイトシフト</label>
+        <div class="segToggle" id="newPaNightToggle">
+          <button class="active" data-val="no" onclick="setNewPaNightAvail('no')">不可</button>
+          <button data-val="yes" onclick="setNewPaNightAvail('yes')">可</button>
+          <button data-val="specialist" onclick="setNewPaNightAvail('specialist')">専門</button>
+        </div>
+        <input type="hidden" id="newPaNightAvail" value="no">
+        <p class="desc" style="margin:-4px 0 10px;">「専門」を選ぶと、このPAはナイト以外の枠の候補には出なくなります。</p>
+        ` : ''}
       </div>
       <button class="btn btn-primary btn-block" onclick="addEmployee()">追加する</button>
     </div>`;
@@ -563,6 +576,10 @@ function setNewEmpType(t){
 function setNewEmpDept(key){
   document.getElementById('newEmpDept').value = key;
   document.querySelectorAll('#newEmpDeptToggle button').forEach(b=> b.classList.toggle('active', b.dataset.dept===key));
+}
+function setNewPaNightAvail(val){
+  document.getElementById('newPaNightAvail').value = val;
+  document.querySelectorAll('#newPaNightToggle button').forEach(b=> b.classList.toggle('active', b.dataset.val===val));
 }
 function toggleNewEmpDay(key){
   const idx = newEmpDays.indexOf(key);
@@ -605,6 +622,11 @@ async function updatePaBaseTime(empId, field, val){
   e.baseTime[field] = val;
   await saveSettings(); scheduleRender();
 }
+async function updatePaNightAvail(empId, val){
+  const e = state.employees.find(x=>x.id===empId); if(!e) return;
+  e.nightAvail = val;
+  await saveSettings(); render();
+}
 
 async function addEmployee(){
   const name = document.getElementById('newEmpName').value.trim();
@@ -627,9 +649,10 @@ async function addEmployee(){
     const dept = document.getElementById('newPaDept').value || null;
     const baseStart = document.getElementById('newPaBaseStart').value;
     const baseEnd = document.getElementById('newPaBaseEnd').value;
+    const nightAvail = document.getElementById('newPaNightAvail')?.value || 'no';
     emp = { id:uid(), name, type:'pa', department: dept,
       wage: wage?Number(wage):null, maxPerWeek: max?Number(max):null,
-      baseTime: {start:baseStart||'', end:baseEnd||''} };
+      baseTime: {start:baseStart||'', end:baseEnd||''}, nightAvail };
   }
   state.employees.push(emp);
   newEmpDays = DAYS.map(d=>d.key);
@@ -684,6 +707,15 @@ function paEditPanel(e){
         <div><label>終了</label><input type="time" value="${bt.end}" onchange="updatePaBaseTime('${e.id}','end',this.value)"></div>
       </div>
       <p class="desc" style="margin:-4px 0 8px;">毎日の基本の出勤可能時間です。休みは「PA希望シフト」タブの希望休で、特定の日だけ時間を変えたい場合はそこの個別設定で調整してください。</p>
+      ${state.nightShiftEnabled ? `
+      <div class="miniTitle">ナイトシフト</div>
+      <div class="segToggle">
+        <button class="${(e.nightAvail||'no')==='no'?'active':''}" onclick="updatePaNightAvail('${e.id}','no')">不可</button>
+        <button class="${e.nightAvail==='yes'?'active':''}" onclick="updatePaNightAvail('${e.id}','yes')">可</button>
+        <button class="${e.nightAvail==='specialist'?'active':''}" onclick="updatePaNightAvail('${e.id}','specialist')">専門</button>
+      </div>
+      <p class="desc" style="margin:-4px 0 8px;">「専門」を選ぶと、このPAはナイト以外の枠の候補には出なくなります。</p>
+      ` : ''}
       <div class="miniTitle">時給・週の出勤日数目安</div>
       <div class="row">
         <div><input type="number" value="${e.wage??''}" onchange="updateEmpField('${e.id}','wage',this.value,'num')" placeholder="時給"></div>
@@ -1058,6 +1090,12 @@ function staffCandidates(dateStr, slot){
   return state.employees.filter(e=>e.type==='staff').filter(e=> isStaffCompatible(e, dateStr, slot) || assigned.includes(e.id));
 }
 function paMatchType(emp, dateStr, slot){
+  const nightAvail = emp.nightAvail || 'no';
+  if(slot.id==='night'){
+    if(nightAvail==='no') return null; // ナイト不可のPAはナイトの候補にしない
+  }else{
+    if(nightAvail==='specialist') return null; // ナイト専門のPAはナイト以外の候補にしない
+  }
   const st = paEffectiveStatus(emp.id, dateStr);
   if(!st.available || st.offRequested) return null;
   if(!st.rangeStart || !st.rangeEnd) return null;
@@ -1281,13 +1319,28 @@ async function autoAssignAllPa(){
   const dates = buildMonthDates(state.month);
   const paList = state.employees.filter(e=>e.type==='pa');
   if(!state.monthData.shifts) state.monthData.shifts = {};
-  let addedCount = 0;
+  let addedCount = 0, removedCount = 0;
 
   dates.forEach(dateStr=>{
     if(!state.monthData.shifts[dateStr]) state.monthData.shifts[dateStr] = {};
     const daySh = state.monthData.shifts[dateStr];
-    const usedToday = new Set(Object.values(daySh).flat());
 
+    // 先に、既に配置されているPAの中で希望休になった人を外す(希望休は絶対厳守のため)
+    Object.keys(daySh).forEach(slotId=>{
+      daySh[slotId] = (daySh[slotId]||[]).filter(id=>{
+        const e = paList.find(x=>x.id===id);
+        if(!e) return true; // 社員はそのまま
+        const st = paEffectiveStatus(e.id, dateStr);
+        if(st.offRequested){
+          removedCount++;
+          if(state.monthData.timeOverrides && state.monthData.timeOverrides[dateStr]) delete state.monthData.timeOverrides[dateStr][id];
+          return false;
+        }
+        return true;
+      });
+    });
+
+    const usedToday = new Set(Object.values(daySh).flat());
     visibleSlots().forEach(slot=>{
       // PA希望休(出勤不可)は最優先で除外。paMatchType内で希望休/出勤可否/時間の完全一致を判定
       const candidates = paList.filter(e=> !usedToday.has(e.id) && paMatchType(e, dateStr, slot)==='full');
@@ -1299,7 +1352,10 @@ async function autoAssignAllPa(){
     });
   });
   await saveMonth(); render();
-  toast(addedCount>0 ? `PA ${addedCount}件をシフトに反映しました(多い場合は手動で調整してください)` : '追加できる候補がありませんでした');
+  const msgParts = [];
+  if(addedCount>0) msgParts.push(`追加${addedCount}件`);
+  if(removedCount>0) msgParts.push(`希望休のため解除${removedCount}件`);
+  toast(msgParts.length ? `PAのシフトを更新しました(${msgParts.join('・')})` : '変更はありませんでした');
 }
 
 // ---------- タイムライン表示 ----------
@@ -1508,13 +1564,13 @@ function viewShift(){
     <div class="card">${monthSwitchHtml()}</div>
     <div class="card">
       <h2><span class="num">①</span>社員の大枠を自動仮作成</h2>
-      <p class="desc">部門・希望休(可能な限り)・予定(会議など)・勤務可能曜日/シフト・シフト適正順位・ナイトローテーションを考慮して仮配置します(あくまで仮案)。PAの割り当てには影響しません。再作成時は上書き確認が出ます。</p>
+      <p class="desc">部門・希望休(可能な限り)・予定(会議など)・勤務可能曜日/シフト・シフト適正順位・ナイトローテーションを考慮して仮配置します(あくまで仮案)。PAの割り当てには影響しません。再作成時は上書き確認が出ます。従業員を追加・削除した後にもう一度押せば、その内容を反映して作り直せます。</p>
       <button class="btn btn-navy btn-block" onclick="autoGenerateStaff()">社員シフトを仮作成する</button>
     </div>
     ${nightRotationHtml()}
     <div class="card">
       <h2><span class="num">②</span>PAを全員仮配置</h2>
-      <p class="desc">出勤可能日・時間がその枠に完全に一致するPAを全員シフトに入れます。PAの希望休は最優先で守られ、絶対に配置されません。多すぎる場合は下の一覧から手動で外してください。</p>
+      <p class="desc">出勤可能日・時間がその枠に完全に一致するPAを全員シフトに入れます(ナイト不可のPAはナイト枠、ナイト専門のPAはナイト以外の枠には出ません)。PAの希望休は最優先で守られ、絶対に配置されません。多すぎる場合は下の一覧から手動で外してください。新しくPAを追加した後にもう一度押せば、既存の配置はそのままに追加分だけ反映されます。</p>
       <button class="btn btn-primary btn-block" onclick="autoAssignAllPa()">PAを全員仮配置する</button>
     </div>
     ${shortHtml}
