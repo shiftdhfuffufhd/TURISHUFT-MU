@@ -221,6 +221,7 @@ let state = {
   shiftSlots: [],
   requiredStaff: {},
   nightShiftEnabled: true,
+  deptRules: {},
   month: null,
   monthData: {availability:{}, shifts:{}, nightRotation:{}, timeOverrides:{}},
   empCalMode: {},
@@ -356,6 +357,7 @@ async function loadAll(){
       const sample = v.requiredStaff ? Object.values(v.requiredStaff)[0] : null;
       state.requiredStaff = (sample && typeof sample === 'object') ? v.requiredStaff : {};
       if(v.nightShiftEnabled !== undefined) state.nightShiftEnabled = !!v.nightShiftEnabled;
+      state.deptRules = (v.deptRules && typeof v.deptRules==='object') ? v.deptRules : {};
     }else{
       state.shiftSlots = DEFAULT_SLOTS.slice();
     }
@@ -363,6 +365,9 @@ async function loadAll(){
   DAYS.forEach(d=>{
     if(!state.requiredStaff[d.key]) state.requiredStaff[d.key] = {};
   });
+  // 部門条件のデフォルト(早番はエサ、遅番はルアーか釣具のどちらか)。設定されていない枠には付与しない。
+  if(state.deptRules.early===undefined && state.shiftSlots.some(s=>s.id==='early')) state.deptRules.early = [['bait']];
+  if(state.deptRules.late===undefined && state.shiftSlots.some(s=>s.id==='late')) state.deptRules.late = [['lure','tackle']];
   state.month = currentYearMonth();
   await loadMonth(state.month);
   state.loaded = true;
@@ -387,7 +392,7 @@ async function saveSettings(){
   try{
     localStorage.setItem('shiftapp_settings', JSON.stringify({
       employees: state.employees, shiftSlots: state.shiftSlots, requiredStaff: state.requiredStaff,
-      nightShiftEnabled: state.nightShiftEnabled
+      nightShiftEnabled: state.nightShiftEnabled, deptRules: state.deptRules
     }));
   }catch(e){ toast('保存に失敗しました'); }
 }
@@ -778,23 +783,54 @@ function nightToggleCardHtml(){
     <p class="desc" style="margin:4px 0 0;">OFFにすると、ナイト関連の設定・週間ローテーション・必要人数の入力欄が非表示になります(設定自体は消えないので、後でONに戻せます)。</p>
   </div>`;
 }
+function deptRuleEditorHtml(slot){
+  const groups = deptRulesFor(slot.id);
+  const groupRows = groups.map((group, gi)=>`
+    <div class="row" style="align-items:center;">
+      <div style="flex:1;font-size:12px;">
+        ${DEPTS.map(d=>`<label class="checkRow" style="display:inline-flex;margin-right:10px;"><input type="checkbox" ${group.includes(d.key)?'checked':''} onchange="toggleDeptRuleDept('${slot.id}',${gi},'${d.key}')"> ${d.label}</label>`).join('')}
+      </div>
+      <button class="btn btn-danger btn-sm" onclick="removeDeptRuleGroup('${slot.id}',${gi})">削除</button>
+    </div>`).join('');
+  return `<div class="miniTitle">部門条件(いずれか1つでも満たせばOKの条件を、いくつでも追加できます)</div>
+    ${groupRows || '<div class="empty" style="padding:4px 0;">条件なし</div>'}
+    <button class="btn btn-ghost btn-sm" onclick="addDeptRuleGroup('${slot.id}')">＋ 条件を追加</button>`;
+}
+async function addDeptRuleGroup(slotId){
+  if(!state.deptRules[slotId]) state.deptRules[slotId] = [];
+  state.deptRules[slotId].push([]);
+  await saveSettings(); render();
+}
+async function removeDeptRuleGroup(slotId, idx){
+  if(!state.deptRules[slotId]) return;
+  state.deptRules[slotId].splice(idx, 1);
+  await saveSettings(); render();
+}
+async function toggleDeptRuleDept(slotId, idx, dept){
+  if(!state.deptRules[slotId] || !state.deptRules[slotId][idx]) return;
+  const group = state.deptRules[slotId][idx];
+  const i = group.indexOf(dept);
+  if(i===-1) group.push(dept); else group.splice(i,1);
+  await saveSettings(); render();
+}
 function viewSlots(){
   const list = state.shiftSlots.map(s=>`
     <div class="empItem"><div class="topRow">
       <div class="name">${escapeHtml(s.name)}${s.id==='night'?' <span class="typeBadge staff">ナイト(特殊ローテーション)</span>':''}</div>
       <button class="btn btn-danger" onclick="removeSlot('${s.id}')">削除</button></div>
       <div class="meta">${formatSlotTime(s)}</div>
+      ${deptRuleEditorHtml(s)}
     </div>`).join('') || `<div class="empty">まだ勤務時間帯が登録されていません</div>`;
   return nightToggleCardHtml() + `
     <div class="card"><h2><span class="num">時間帯</span>登録済みの勤務時間帯</h2>
-      <p class="desc">初期状態は「早番・中番・遅番・ナイト」の4種類固定です(id が night のものはナイトの週間ローテーション対象)。</p>${list}</div>
+      <p class="desc">初期状態は「早番・中番・遅番・ナイト」の4種類固定です(id が night のものはナイトの週間ローテーション対象)。各時間帯の「部門条件」で、その枠に最低1人欲しい部門を後から自由に追加・編集できます(例: 早番はエサ、遅番はルアーか釣具のどちらか)。</p>${list}</div>
     <div class="card"><h2>新しく登録する</h2>
       <label>名前</label><input type="text" id="newSlotName" placeholder="例: 早番">
       <div class="row">
         <div><label>開始時刻</label><input type="time" id="newSlotStart" value="09:00"></div>
         <div><label>終了時刻</label><input type="time" id="newSlotEnd" value="18:00"></div>
       </div>
-      <p class="desc" style="margin-top:-4px;">終了時刻が開始時刻と同じか前の場合は「翌日終了」として扱います。</p>
+      <p class="desc" style="margin-top:-4px;">終了時刻が開始時刻と同じか前の場合は「翌日終了」として扱います。部門条件は登録後に上の一覧から追加できます。</p>
       <button class="btn btn-primary btn-block" onclick="addSlot()">追加する</button>
     </div>`;
 }
@@ -813,6 +849,7 @@ async function removeSlot(id){
     Object.keys(rec).forEach(dateStr=>{ if(rec[dateStr].slots) rec[dateStr].slots = rec[dateStr].slots.filter(x=>x!==id); });
   });
   state.employees.forEach(e=>{ if(e.shiftRank && e.shiftRank[id]) delete e.shiftRank[id]; if(e.workableShifts) e.workableShifts = e.workableShifts.filter(x=>x!==id); });
+  if(state.deptRules) delete state.deptRules[id];
   await saveSettings(); await saveMonth(); render(); toast('削除しました');
 }
 
@@ -1158,25 +1195,33 @@ function computeStaffShortages(){
 function computeShortages(){
   return computeStaffShortages();
 }
+// 部門ルールを取得(グループの配列。各グループはOR条件で、少なくとも1人がそのいずれかの部門であればOK)
+function deptRulesFor(slotId){
+  return (state.deptRules && state.deptRules[slotId]) || [];
+}
+function deptGroupLabel(group){
+  return group.map(d=>DEPT_LABEL[d]).join('か');
+}
+// 満たせていない部門ルールのグループを返す(各グループはOR条件の配列)
 function computeDeptShortage(dateStr, slot, assignedIds){
-  const req = slot.id==='early' ? ['bait'] : (slot.id==='late' ? ['bait','lure','tackle'] : []);
-  if(req.length===0) return [];
+  const rules = deptRulesFor(slot.id);
+  if(rules.length===0) return [];
   const covered = assignedIds.flatMap(id=>{ const e=state.employees.find(x=>x.id===id); return (e&&e.departments)||[]; });
-  return req.filter(d=> !covered.includes(d));
+  return rules.filter(group=> !group.some(d=>covered.includes(d)));
 }
 function computeDeptWarningsList(){
   const dates = buildMonthDates(state.month);
   const list = [];
   dates.forEach(dateStr=>{
     const dayKey = weekdayKeyOfDate(dateStr);
-    ['early','late'].forEach(slotId=>{
-      const slot = state.shiftSlots.find(s=>s.id===slotId); if(!slot) return;
-      const need = (state.requiredStaff[dayKey]&&state.requiredStaff[dayKey][slotId])||0;
+    state.shiftSlots.forEach(slot=>{
+      if(deptRulesFor(slot.id).length===0) return;
+      const need = (state.requiredStaff[dayKey]&&state.requiredStaff[dayKey][slot.id])||0;
       if(need<=0) return;
-      const assigned = getAssigned(dateStr, slotId);
+      const assigned = getAssigned(dateStr, slot.id);
       if(assigned.length===0) return;
       const missing = computeDeptShortage(dateStr, slot, assigned);
-      missing.forEach(d=> list.push({dateStr, slot, dept:DEPT_LABEL[d]}));
+      missing.forEach(group=> list.push({dateStr, slot, dept:deptGroupLabel(group)}));
     });
   });
   return list;
@@ -1567,7 +1612,7 @@ function reallocateSurplusStaff(){
 // 候補者の並び順: ①シフト適正順位 → ②2連休優先 → ③連勤日数が少ない人 → ④月間勤務時間が少ない人 → ⑤月内出勤日数(勤務負担)が少ない人
 function pickForSlot(pool, slot, need, monthCounts, alreadyChosenIds, restBonusSet, streak, monthHours){
   if(need<=0) return [];
-  const deptReq = slot.id==='early' ? ['bait'] : (slot.id==='late' ? ['bait','lure','tackle'] : []);
+  const deptGroups = deptRulesFor(slot.id);
   const alreadyDepts = alreadyChosenIds.flatMap(id=>{ const e=state.employees.find(x=>x.id===id); return (e&&e.departments)||[]; });
   const restRank = (e)=> (restBonusSet && restBonusSet.has(e.id)) ? 1 : 0;
   const cmp = (a,b)=>
@@ -1577,9 +1622,9 @@ function pickForSlot(pool, slot, need, monthCounts, alreadyChosenIds, restBonusS
     || ((monthHours&&monthHours[a.id])||0)-((monthHours&&monthHours[b.id])||0)
     || monthCounts[a.id]-monthCounts[b.id];
   let chosen = [];
-  deptReq.filter(d=>!alreadyDepts.includes(d)).forEach(dept=>{
+  deptGroups.filter(group=> !group.some(d=>alreadyDepts.includes(d))).forEach(group=>{
     if(chosen.length>=need) return;
-    const cand = pool.filter(e=> (e.departments||[]).includes(dept) && !chosen.includes(e)).sort(cmp);
+    const cand = pool.filter(e=> (e.departments||[]).some(d=>group.includes(d)) && !chosen.includes(e)).sort(cmp);
     if(cand[0]) chosen.push(cand[0]);
   });
   const remaining = need - chosen.length;
