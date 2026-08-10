@@ -140,6 +140,8 @@
   .tlBar.barStaff{ background:var(--navyChip); }
   .tlBar.barPaRegular{ background:var(--coral); }
   .tlBar.barPaNormal{ background:var(--coral-light); }
+  .tlBar{ cursor:pointer; }
+  .tlBar.editing{ outline:2px solid var(--navy); outline-offset:1px; }
 
   .slotBlock{ margin-top:8px; padding-top:8px; border-top:1px dashed var(--line); }
   .slotBlock:first-of-type{ margin-top:0; padding-top:0; border-top:none; }
@@ -229,11 +231,12 @@ let state = {
     evening:{start:'17:00', end:'22:00'}, allday:{start:'09:00', end:'22:00'}
   },
   month: null,
-  monthData: {availability:{}, shifts:{}, nightRotation:{}},
+  monthData: {availability:{}, shifts:{}, nightRotation:{}, timeOverrides:{}},
   empCalMode: {},
   empSelectedDate: {},
   empEditOpen: {},
   shiftViewFilter: 'all',
+  timelineEdit: null,
   loaded: false
 };
 
@@ -340,13 +343,14 @@ function paEffectiveStatus(empId, dateStr){
   const slots = state.shiftSlots.filter(s=>slotWithinRange(s, resolved.start, resolved.end)).map(s=>s.id);
   return {available:true, offRequested:false, slots, rangeStart:resolved.start, rangeEnd:resolved.end};
 }
-async function setPaOverride(empId, dateStr, patch){
+async function setPaOverride(empId, dateStr, patch, immediate){
   if(!state.monthData.availability[empId]) state.monthData.availability[empId] = {};
   const cur = state.monthData.availability[empId][dateStr] || {};
   const rs = patch.rangeStart!==undefined?patch.rangeStart:cur.rangeStart, re = patch.rangeEnd!==undefined?patch.rangeEnd:cur.rangeEnd;
   const slots = (rs && re) ? state.shiftSlots.filter(s=>slotWithinRange(s,rs,re)).map(s=>s.id) : (cur.slots||[]);
   state.monthData.availability[empId][dateStr] = {...cur, ...patch, slots, override:true};
-  await saveMonth(); render();
+  await saveMonth();
+  if(immediate===false) scheduleRender(); else render();
 }
 async function resetPaOverride(empId, dateStr){
   if(state.monthData.availability[empId]) delete state.monthData.availability[empId][dateStr];
@@ -408,9 +412,9 @@ async function saveSettings(){
 async function loadMonth(ym){
   try{
     const raw = localStorage.getItem('shiftapp_month_' + ym);
-    state.monthData = raw ? JSON.parse(raw) : {availability:{}, shifts:{}, nightRotation:{}};
+    state.monthData = raw ? JSON.parse(raw) : {availability:{}, shifts:{}, nightRotation:{}, timeOverrides:{}};
     if(!state.monthData.nightRotation) state.monthData.nightRotation = {};
-  }catch(e){ state.monthData = {availability:{}, shifts:{}, nightRotation:{}}; }
+  }catch(e){ state.monthData = {availability:{}, shifts:{}, nightRotation:{}, timeOverrides:{}}; }
 }
 async function saveMonth(){
   try{ localStorage.setItem('shiftapp_month_' + state.month, JSON.stringify(state.monthData)); }
@@ -471,9 +475,10 @@ function viewHome(){
     </div>
     <div class="card"><h2><span class="num">流れ</span>基本の作成手順</h2>
       <p class="desc">
-        ①社員を登録 → ②社員+レギュラーPAで大枠を自動仮作成 → ③必要人数・部門配置を確認 →
-        ④不足時間帯を計算 → ⑤通常PAの候補を表示 → ⑥管理者が候補を選んで追加 → ⑦最終確認・調整。<br>
-        優先順位は「社員 → レギュラーPA → 通常PA」。すべて仮案です。
+        ①社員を登録・自動仮作成(部門/希望休/適正順位/ナイトローテーションを考慮) →
+        ②PAは出勤可能日・時間に一致した人を全員仮配置 → ③多すぎる所は管理者が手動で減らす、
+        足りない所は候補から追加する → ④最終確認・調整。<br>
+        社員の希望休は可能な限り、PAの希望休は最優先で守ります。すべて仮案です。
       </p>
     </div>
     <div class="card"><h2><span class="num">1</span>従業員を登録する(社員/レギュラーPA/通常PA)</h2>
@@ -557,9 +562,9 @@ function viewEmployees(){
         ${state.nightShiftEnabled ? `<label class="checkRow"><input type="checkbox" id="newEmpNightOk"> ナイト勤務可能</label>` : ''}
         <label>週の勤務日数(目安・任意)</label>
         <input type="number" id="newEmpMax" placeholder="5">
-        <label>月の休み日数(下限の目安・任意)</label>
+        <label>月の休み日数(下限・任意)</label>
         <input type="number" id="newEmpMinOff" placeholder="8">
-        <p class="desc" style="margin:-4px 0 10px;">この日数分の休みを確保できるよう、自動仮作成では出勤日数がこの目安に達したらその社員を配置対象から外します。</p>
+        <p class="desc" style="margin:-4px 0 10px;">自動仮作成では、この休み日数を必ず確保します(出勤日数がこの日数を超えたら、必要人数を満たせなくてもその社員は配置対象から外れます)。ナイトのローテーションにも適用されます。</p>
         <label>備考(任意)</label>
         <input type="text" id="newEmpNote" placeholder="例: 車通勤のみ可">
       </div>
@@ -681,7 +686,7 @@ async function updatePaPatternType(empId, dayKey, type){
 async function updatePaPatternCustom(empId, dayKey, field, val){
   const e = state.employees.find(x=>x.id===empId); if(!e) return;
   e.basePattern[dayKey][field] = val;
-  await saveSettings(); render();
+  await saveSettings(); scheduleRender();
 }
 
 async function addEmployee(){
@@ -746,8 +751,9 @@ function staffEditPanel(e){
       ${state.nightShiftEnabled ? `<label class="checkRow"><input type="checkbox" ${e.nightOk?'checked':''} onchange="updateEmpField('${e.id}','nightOk',this.checked,'bool')"> ナイト勤務可能</label>` : ''}
       <label>週の勤務日数(目安)</label>
       <input type="number" value="${e.maxPerWeek??''}" onchange="updateEmpField('${e.id}','maxPerWeek',this.value,'num')">
-      <label>月の休み日数(下限の目安)</label>
+      <label>月の休み日数(下限・厳守)</label>
       <input type="number" value="${e.monthMinDaysOff??''}" onchange="updateEmpField('${e.id}','monthMinDaysOff',this.value,'num')">
+      <p class="desc" style="margin:2px 0 8px;">自動仮作成ではこの日数を必ず確保します(超えたら配置対象から外れます)。</p>
       <div class="meta" style="margin:2px 0 8px;">今月(${monthLabel(state.month)})：${empMonthDays(e.id)}日出勤 / ${daysInMonth(state.month)-empMonthDays(e.id)}日休み</div>
       <label>備考</label>
       <input type="text" value="${escapeHtml(e.note)}" onchange="updateEmpField('${e.id}','note',this.value)">
@@ -949,8 +955,8 @@ async function updateStaffSpecial(empId, dateStr, field, val){
   const specialEntry = {...cur, [field]: val};
   setDayStatus(empId, dateStr, {specialEntry});
   await saveMonth();
-  // 開始・終了の時刻入力は、再描画するとiOSの時刻ピッカーが不安定になるため再描画しない
-  if(field==='start' || field==='end') return;
+  // 開始・終了の時刻入力は、即座に再描画するとiOSの時刻ピッカーが不安定になるため少し遅らせる
+  if(field==='start' || field==='end'){ scheduleRender(); return; }
   render();
 }
 async function clearStaffSpecial(empId, dateStr){
@@ -1027,7 +1033,7 @@ function presetEditorHtml(){
     ${rows}</div>`;
 }
 async function updatePaPreset(key, field, val){
-  state.paPresets[key][field] = val; await saveSettings(); render();
+  state.paPresets[key][field] = val; await saveSettings(); scheduleRender();
 }
 function buildCalendarCells(empId){
   const ym = state.month; const n = daysInMonth(ym);
@@ -1063,7 +1069,7 @@ async function updatePaRange(empId, dateStr, field, val){
   const eff = paEffectiveStatus(empId, dateStr);
   const patch = {available:true, offRequested:eff.offRequested, rangeStart:eff.rangeStart, rangeEnd:eff.rangeEnd};
   patch[field] = val;
-  await setPaOverride(empId, dateStr, patch);
+  await setPaOverride(empId, dateStr, patch, false);
 }
 function dayDetailHtml(empId, dateStr){
   const eff = paEffectiveStatus(empId, dateStr);
@@ -1117,6 +1123,25 @@ function slotHoursCalc(slot){
   let s=sh*60+sm, e=eh*60+em; if(e<=s) e+=24*60;
   return Math.round(((e-s)/60)*100)/100;
 }
+// その日・その人の実際の勤務時間(個別に時間を変更していればそれを優先、なければ枠の時間のまま)
+function getAssignTimeOverride(dateStr, empId){
+  return ((state.monthData.timeOverrides||{})[dateStr]||{})[empId] || null;
+}
+function getEffectiveAssignTime(dateStr, empId, slot){
+  const ov = getAssignTimeOverride(dateStr, empId);
+  return ov ? {start:ov.start||slot.start, end:ov.end||slot.end} : {start:slot.start, end:slot.end};
+}
+async function setAssignTimeOverride(dateStr, empId, field, val){
+  if(!state.monthData.timeOverrides) state.monthData.timeOverrides = {};
+  if(!state.monthData.timeOverrides[dateStr]) state.monthData.timeOverrides[dateStr] = {};
+  const cur = state.monthData.timeOverrides[dateStr][empId] || {start:'', end:''};
+  state.monthData.timeOverrides[dateStr][empId] = {...cur, [field]: val};
+  await saveMonth(); scheduleRender();
+}
+async function resetAssignTimeOverride(dateStr, empId){
+  if(state.monthData.timeOverrides && state.monthData.timeOverrides[dateStr]) delete state.monthData.timeOverrides[dateStr][empId];
+  await saveMonth(); render();
+}
 function empMonthHours(empId){
   const shifts = state.monthData.shifts || {};
   let total = 0;
@@ -1125,7 +1150,10 @@ function empMonthHours(empId){
     Object.keys(daySh).forEach(slotId=>{
       if((daySh[slotId]||[]).includes(empId)){
         const slot = state.shiftSlots.find(s=>s.id===slotId);
-        if(slot) total += slotHoursCalc(slot);
+        if(slot){
+          const eff = getEffectiveAssignTime(dateStr, empId, slot);
+          total += slotHoursCalc(eff);
+        }
       }
     });
   });
@@ -1180,10 +1208,6 @@ function staffCandidates(dateStr, slot){
   const assigned = getAssigned(dateStr, slot.id);
   return state.employees.filter(e=>e.type==='staff').filter(e=> isStaffCompatible(e, dateStr, slot) || assigned.includes(e.id));
 }
-function regularPaCandidates(dateStr, slot){
-  const assigned = getAssigned(dateStr, slot.id);
-  return state.employees.filter(e=>e.type==='pa'&&e.paType==='regular').filter(e=> isCandidateCompatible(e,dateStr,slot) || assigned.includes(e.id));
-}
 function paMatchType(emp, dateStr, slot){
   const st = paEffectiveStatus(emp.id, dateStr);
   if(!st.available || st.offRequested) return null;
@@ -1196,10 +1220,11 @@ function paMatchType(emp, dateStr, slot){
   const overlap = Math.min(slotEndH, rangeEndH) - Math.max(slotStartH, rangeStartH);
   return overlap>0 ? 'partial' : null;
 }
-function normalPaCandidateGroups(dateStr, slot){
+// レギュラー/通常どちらも対象。出勤可能日・時間がその枠を完全にカバーする人を「候補」、一部だけの人を「一部候補」とする
+function paCandidateGroups(dateStr, slot){
   const assigned = getAssigned(dateStr, slot.id);
   const full=[], partial=[];
-  state.employees.filter(e=>e.type==='pa'&&e.paType==='normal').forEach(e=>{
+  state.employees.filter(e=>e.type==='pa').forEach(e=>{
     if(assigned.includes(e.id)){ full.push(e); return; }
     const m = paMatchType(e, dateStr, slot);
     if(m==='full') full.push(e); else if(m==='partial') partial.push(e);
@@ -1284,13 +1309,19 @@ async function toggleAssign(empId, dateStr, slotId){
   if(!daySh[slotId]) daySh[slotId] = [];
   const wasInThisSlot = daySh[slotId].includes(empId);
   Object.keys(daySh).forEach(sid=>{ daySh[sid] = (daySh[sid]||[]).filter(id=>id!==empId); });
-  if(!wasInThisSlot) daySh[slotId].push(empId);
+  if(!wasInThisSlot){
+    daySh[slotId].push(empId);
+  }else{
+    // 割り当てを外した場合、その日の個別時間の上書きも一緒に削除する
+    if(state.monthData.timeOverrides && state.monthData.timeOverrides[dateStr]) delete state.monthData.timeOverrides[dateStr][empId];
+    if(state.timelineEdit && state.timelineEdit.dateStr===dateStr && state.timelineEdit.empId===empId) state.timelineEdit = null;
+  }
   await saveMonth(); render();
 }
 function hasExistingStaffShifts(){
   const shifts = state.monthData.shifts||{};
   return Object.values(shifts).some(daySh=> Object.values(daySh||{}).some(arr=>(arr||[]).some(id=>{
-    const e = state.employees.find(x=>x.id===id); return e && (e.type==='staff' || e.paType==='regular');
+    const e = state.employees.find(x=>x.id===id); return e && e.type==='staff';
   })));
 }
 
@@ -1312,14 +1343,15 @@ async function setNightRotation(weekKey, empId){
   state.monthData.nightRotation[weekKey] = empId;
   await saveMonth(); render();
 }
-function nightPersonForDate(dateStr){
+function nightPersonForDate(dateStr, monthCounts){
   const wk = mondayOf(dateStr);
   const nSlot = nightSlot(); if(!nSlot) return null;
+  const withinDaysOffLimit = (e)=> !e.monthMinDaysOff || !monthCounts || (monthCounts[e.id]||0) < (daysInMonth(state.month) - e.monthMinDaysOff);
   const primaryId = (state.monthData.nightRotation||{})[wk];
   const primary = state.employees.find(e=>e.id===primaryId);
-  if(primary && isCandidateCompatible(primary, dateStr, nSlot)) return primary;
+  if(primary && isCandidateCompatible(primary, dateStr, nSlot) && withinDaysOffLimit(primary)) return primary;
   const altStaff = state.employees.filter(e=>e.type==='staff' && e.nightOk && e.id!==primaryId)
-    .find(e=> isCandidateCompatible(e, dateStr, nSlot));
+    .find(e=> isCandidateCompatible(e, dateStr, nSlot) && withinDaysOffLimit(e));
   if(altStaff) return altStaff;
   const regPaNight = state.employees.filter(e=>e.type==='pa' && e.paType==='regular' && e.nightOk)
     .filter(e=> isCandidateCompatible(e, dateStr, nSlot))
@@ -1347,16 +1379,14 @@ function pickForSlot(pool, slot, need, monthCounts, alreadyChosenIds){
   return chosen;
 }
 
-// ①②社員+レギュラーPAで大枠を自動仮作成
+// ①社員の大枠を自動仮作成
 async function autoGenerateStaff(){
-  if(hasExistingStaffShifts() && !confirm('既存の社員/レギュラーPAシフト(仮案)を上書きします。よろしいですか？')) return;
+  if(hasExistingStaffShifts() && !confirm('既存の社員シフト(仮案)を上書きします。よろしいですか？')) return;
   ensureNightRotation();
   const dates = buildMonthDates(state.month);
   const monthCounts = {}; const weeklyCounts = {};
   const staffList = state.employees.filter(e=>e.type==='staff');
-  const regularPaList = state.employees.filter(e=>e.type==='pa'&&e.paType==='regular');
   staffList.forEach(e=> monthCounts[e.id]=0);
-  regularPaList.forEach(e=> monthCounts[e.id]=0);
   if(!state.monthData.shifts) state.monthData.shifts = {};
 
   dates.forEach(dateStr=>{
@@ -1365,11 +1395,11 @@ async function autoGenerateStaff(){
     if(!weeklyCounts[weekKey]) weeklyCounts[weekKey] = {};
     if(!state.monthData.shifts[dateStr]) state.monthData.shifts[dateStr] = {};
     const daySh = state.monthData.shifts[dateStr];
-    // 社員・レギュラーPAの既存割り当てのみリセット(通常PAはそのまま残す)
+    // 社員の既存割り当てのみリセット(PAはそのまま残す)
     Object.keys(daySh).forEach(slotId=>{
       daySh[slotId] = (daySh[slotId]||[]).filter(id=>{
         const emp = state.employees.find(x=>x.id===id);
-        return !(emp && (emp.type==='staff' || emp.paType==='regular'));
+        return !(emp && emp.type==='staff');
       });
     });
     const usedToday = new Set(Object.values(daySh).flat());
@@ -1392,7 +1422,7 @@ async function autoGenerateStaff(){
     if(nSlot && state.nightShiftEnabled){
       const need = (state.requiredStaff[dayKey] && state.requiredStaff[dayKey][nSlot.id]) || 0;
       if(need>0){
-        const person = nightPersonForDate(dateStr);
+        const person = nightPersonForDate(dateStr, monthCounts);
         if(person && !usedToday.has(person.id)){
           if(!daySh[nSlot.id]) daySh[nSlot.id] = [];
           daySh[nSlot.id] = [...daySh[nSlot.id], person.id];
@@ -1410,26 +1440,18 @@ async function autoGenerateStaff(){
       const chosenStaff = pickForSlot(staffPool, slot, need, monthCounts, []);
       chosenStaff.forEach(e=>{ monthCounts[e.id]++; weeklyCounts[weekKey][e.id]=(weeklyCounts[weekKey][e.id]||0)+1; usedToday.add(e.id); });
 
-      const paNeed = (state.paRequired[dayKey] && state.paRequired[dayKey][slot.id]) || 0;
-      let chosenRegPa = [];
-      if(paNeed>0){
-        let regPool = regularPaList.filter(e=> !usedToday.has(e.id) && isCandidateCompatible(e, dateStr, slot));
-        regPool = regPool.filter(e=> !e.maxPerWeek || (weeklyCounts[weekKey][e.id]||0) < e.maxPerWeek);
-        chosenRegPa = pickForSlot(regPool, slot, paNeed, monthCounts, chosenStaff.map(e=>e.id));
-        chosenRegPa.forEach(e=>{ monthCounts[e.id]++; weeklyCounts[weekKey][e.id]=(weeklyCounts[weekKey][e.id]||0)+1; usedToday.add(e.id); });
-      }
       if(!daySh[slot.id]) daySh[slot.id] = [];
-      daySh[slot.id] = [...daySh[slot.id], ...chosenStaff.map(e=>e.id), ...chosenRegPa.map(e=>e.id)];
+      daySh[slot.id] = [...daySh[slot.id], ...chosenStaff.map(e=>e.id)];
     });
   });
   await saveMonth(); render();
-  toast('社員+レギュラーPAで大枠を仮作成しました(内容を確認・調整してください)');
+  toast('社員シフトを仮作成しました(内容を確認・調整してください)');
 }
 
-// 通常PA: 出勤可能な人を全員仮配置(多すぎる場合は管理者が手動で調整する運用)
-async function autoAssignAllNormalPa(){
+// PA(レギュラー・通常どちらも): 出勤可能日・時間に適合した人を全員仮配置(多すぎる場合は管理者が手動で調整する運用)
+async function autoAssignAllPa(){
   const dates = buildMonthDates(state.month);
-  const normalList = state.employees.filter(e=>e.type==='pa'&&e.paType==='normal');
+  const paList = state.employees.filter(e=>e.type==='pa');
   if(!state.monthData.shifts) state.monthData.shifts = {};
   let addedCount = 0;
 
@@ -1442,7 +1464,8 @@ async function autoAssignAllNormalPa(){
     visibleSlots().forEach(slot=>{
       const paNeed = (state.paRequired[dayKey] && state.paRequired[dayKey][slot.id]) || 0;
       if(paNeed<=0) return;
-      const candidates = normalList.filter(e=> !usedToday.has(e.id) && paMatchType(e, dateStr, slot)==='full');
+      // PA希望休(出勤不可)は最優先で除外。paMatchType内で希望休/出勤可否/時間の完全一致を判定
+      const candidates = paList.filter(e=> !usedToday.has(e.id) && paMatchType(e, dateStr, slot)==='full');
       if(candidates.length===0) return;
       if(!daySh[slot.id]) daySh[slot.id] = [];
       candidates.forEach(e=>{
@@ -1451,7 +1474,7 @@ async function autoAssignAllNormalPa(){
     });
   });
   await saveMonth(); render();
-  toast(addedCount>0 ? `通常PA ${addedCount}件を仮配置しました(多い場合は手動で調整してください)` : '追加できる候補がありませんでした');
+  toast(addedCount>0 ? `PA ${addedCount}件を仮配置しました(多い場合は手動で調整してください)` : '追加できる候補がありませんでした');
 }
 
 // ---------- タイムライン表示 ----------
@@ -1472,19 +1495,48 @@ function timelineHtml(dateStr){
   if(rows.length===0) return `<div class="empty" style="padding:10px 0;">配置なし</div>`;
   rows.sort((a,b)=> normHour(a.slot.start)-normHour(b.slot.start));
   const ruler = `<div class="tlRuler">${[4,7,10,13,16,19,22,1,4].map(h=>`<span>${h}</span>`).join('')}</div>`;
+  const edit = state.timelineEdit;
   const bars = rows.map(r=>{
-    const startH = normHour(r.slot.start);
-    let endH = normHour(r.slot.end); if(r.slot.end<=r.slot.start) endH += 24;
+    const eff = getEffectiveAssignTime(dateStr, r.emp.id, r.slot);
+    const startH = normHour(eff.start);
+    let endH = normHour(eff.end); if(eff.end<=eff.start) endH += 24;
     const leftPct = ((startH-TL_START)/(TL_END-TL_START))*100;
     const widthPct = ((endH-startH)/(TL_END-TL_START))*100;
     const cls = r.emp.type==='staff' ? 'barStaff' : (r.emp.paType==='regular' ? 'barPaRegular' : 'barPaNormal');
+    const isEditing = edit && edit.dateStr===dateStr && edit.empId===r.emp.id;
     return `<div class="tlRow">
       <div class="tlName">${escapeHtml(r.emp.name)}</div>
-      <div class="tlTrack"><div class="tlBar ${cls}" style="left:${leftPct}%; width:${widthPct}%;">${formatSlotTime(r.slot)}</div></div>
-    </div>`;
+      <div class="tlTrack"><div class="tlBar ${cls} ${isEditing?'editing':''}" style="left:${leftPct}%; width:${widthPct}%;" onclick="openTimelineEdit('${dateStr}','${r.emp.id}')">${formatRangeSimple(eff)}</div></div>
+</div>`;
   }).join('');
-  return `<div class="timeline">${ruler}${bars}</div>`;
+  const editPanel = (edit && edit.dateStr===dateStr) ? timelineEditPanelHtml(dateStr, edit.empId) : '';
+  return `<div class="timeline">${ruler}${bars}</div>${editPanel}`;
 }
+function openTimelineEdit(dateStr, empId){
+  state.timelineEdit = {dateStr, empId};
+  render();
+}
+function timelineEditPanelHtml(dateStr, empId){
+  const e = state.employees.find(x=>x.id===empId); if(!e) return '';
+  const slotId = Object.keys(state.monthData.shifts[dateStr]||{}).find(sid=> (state.monthData.shifts[dateStr][sid]||[]).includes(empId));
+  const slot = state.shiftSlots.find(s=>s.id===slotId);
+  if(!slot) return '';
+  const eff = getEffectiveAssignTime(dateStr, empId, slot);
+  const ov = getAssignTimeOverride(dateStr, empId);
+  return `<div class="dayDetail">
+    <div class="ddTitle">${escapeHtml(e.name)}の${formatMD(dateStr)}の勤務時間を変更</div>
+    <p class="desc" style="margin:0 0 8px;">枠本来の時間：${formatSlotTime(slot)}</p>
+    <div class="row">
+      <div><label>開始</label><input type="time" value="${eff.start}" onchange="setAssignTimeOverride('${dateStr}','${empId}','start',this.value)"></div>
+      <div><label>終了</label><input type="time" value="${eff.end}" onchange="setAssignTimeOverride('${dateStr}','${empId}','end',this.value)"></div>
+    </div>
+    <div class="row" style="margin-top:6px;">
+      ${ov ? `<button class="btn btn-ghost btn-sm" onclick="resetAssignTimeOverride('${dateStr}','${empId}')">枠本来の時間に戻す</button>` : ''}
+      <button class="btn btn-ghost btn-sm" onclick="closeTimelineEdit()">閉じる</button>
+    </div>
+  </div>`;
+}
+function closeTimelineEdit(){ state.timelineEdit = null; render(); }
 
 function workloadSummaryHtml(){
   if(state.employees.length === 0) return '';
@@ -1494,7 +1546,7 @@ function workloadSummaryHtml(){
     const days = empMonthDays(e.id);
     const off = totalDays - days;
     const badge = e.type==='staff' ? '社員' : (e.paType==='regular'?'レギュラーPA':'通常PA');
-    const offTxt = e.type==='staff' && e.monthMinDaysOff ? `${off}日(目安${e.monthMinDaysOff}日)` : `${off}日`;
+    const offTxt = e.type==='staff' && e.monthMinDaysOff ? `${off}日(下限${e.monthMinDaysOff}日)` : `${off}日`;
     return `<div class="empItem" style="margin-bottom:6px;padding:8px 10px;">
       <div class="topRow"><div class="name" style="font-size:12.5px;">${escapeHtml(e.name)} <span class="typeBadge ${e.type}">${badge}</span></div>
       <div class="mono" style="font-size:12px;color:var(--navyChip);">${days}日出勤 / 休み${offTxt} / ${hours}h</div></div>
@@ -1610,30 +1662,20 @@ function viewShift(){
         }).join('') || `<span style="font-size:12px;color:var(--sub)">候補なし</span>`;
         staffHtml = `<div class="miniLabel">社員(${staffAssigned.length}/${staffNeed})</div><div class="chipRow">${chips}</div>`;
       }
-      let regPaHtml = '';
+      let paHtml = '';
       if(filter!=='staff'){
-        const cands = regularPaCandidates(dateStr, slot);
-        const chips = cands.map(e=>{
-          const isAssigned = regAssigned.includes(e.id);
-          const deptTxt = e.department ? `[${DEPT_LABEL[e.department]}]` : '';
-          const rankTxt = slot.id!=='night' && e.shiftRank[slot.id] ? `(第${e.shiftRank[slot.id]}希望)` : '';
-          return `<div class="chip ${isAssigned?'assignedPa':'avail'}" onclick="toggleAssign('${e.id}','${dateStr}','${slot.id}')">${escapeHtml(e.name)}${deptTxt}${rankTxt}</div>`;
-        }).join('') || `<span style="font-size:12px;color:var(--sub)">候補なし</span>`;
-        regPaHtml = `<div class="miniLabel">レギュラーPA(${regAssigned.length})</div><div class="chipRow">${chips}</div>`;
-      }
-      let normalPaHtml = '';
-      if(filter!=='staff'){
-        const {full, partial} = normalPaCandidateGroups(dateStr, slot);
+        const {full, partial} = paCandidateGroups(dateStr, slot);
         const chip = (e, tag)=>{
-          const isAssigned = normalAssigned.includes(e.id);
+          const isAssigned = assigned.includes(e.id);
           const st = paEffectiveStatus(e.id, dateStr);
           const timeTxt = st.rangeStart&&st.rangeEnd ? `(${st.rangeStart}〜${st.rangeEnd})` : '';
           const deptTxt = e.department ? `[${DEPT_LABEL[e.department]}]` : '';
-          return `<div class="chip ${isAssigned?'assignedPa':(tag?'partial':'avail')}" onclick="toggleAssign('${e.id}','${dateStr}','${slot.id}')">${escapeHtml(e.name)}${deptTxt}${timeTxt}${tag}</div>`;
+          const typeTxt = e.paType==='regular' ? '★' : '';
+          return `<div class="chip ${isAssigned?'assignedPa':(tag?'partial':'avail')}" onclick="toggleAssign('${e.id}','${dateStr}','${slot.id}')">${typeTxt}${escapeHtml(e.name)}${deptTxt}${timeTxt}${tag}</div>`;
         };
         const fullChips = full.map(e=>chip(e,'')).join('') || `<span style="font-size:12px;color:var(--sub)">候補なし</span>`;
         const partialChips = partial.length ? `<div class="miniLabel" style="margin-top:6px;">一部時間のみ勤務可能</div><div class="chipRow">${partial.map(e=>chip(e,'(一部)')).join('')}</div>` : '';
-        normalPaHtml = `<div class="miniLabel">通常PA(${normalAssigned.length})</div><div class="chipRow">${fullChips}</div>${partialChips}`;
+        paHtml = `<div class="miniLabel">PA(${paAssignedCount}/${paNeed})　★=レギュラーPA</div><div class="chipRow">${fullChips}</div>${partialChips}`;
       }
 
       const paBadgeCls = paNeed<=0 ? 'ok' : (paOver ? 'warn' : (paOk ? 'ok' : 'warn'));
@@ -1644,7 +1686,7 @@ function viewShift(){
               <span class="needBadge ${staffOk?'ok':'warn'}">社員${staffAssigned.length}/${staffNeed}</span>
               <span class="needBadge ${paBadgeCls}">PA${paAssignedCount}/${paNeed}${paOver?'(多)':''}</span>
             </span></div>
-          ${staffHtml}${regPaHtml}${normalPaHtml}
+          ${staffHtml}${paHtml}
         </div>`;
     }).join('');
     if(!slotBlocks.trim()) return '';
@@ -1660,15 +1702,15 @@ function viewShift(){
   return `
     <div class="card">${monthSwitchHtml()}</div>
     <div class="card">
-      <h2><span class="num">①②</span>社員+レギュラーPAで大枠を自動仮作成</h2>
-      <p class="desc">部門・希望休・予定(会議など)・勤務可能曜日/シフト・シフト適正順位・ナイトローテーションを、社員→レギュラーPAの優先順で考慮して仮配置します(あくまで仮案)。通常PAの割り当てには影響しません。再作成時は上書き確認が出ます。</p>
-      <button class="btn btn-navy btn-block" onclick="autoGenerateStaff()">大枠を仮作成する</button>
+      <h2><span class="num">①</span>社員の大枠を自動仮作成</h2>
+      <p class="desc">部門・希望休(可能な限り)・予定(会議など)・勤務可能曜日/シフト・シフト適正順位・ナイトローテーションを考慮して仮配置します(あくまで仮案)。PAの割り当てには影響しません。再作成時は上書き確認が出ます。</p>
+      <button class="btn btn-navy btn-block" onclick="autoGenerateStaff()">社員シフトを仮作成する</button>
     </div>
     ${nightRotationHtml()}
     <div class="card">
-      <h2><span class="num">③</span>通常PAを全員仮配置</h2>
-      <p class="desc">PA必要人数が設定されている枠に対して、その日出勤可能な通常PAを一旦全員シフトに入れます。必要人数より多くなった場合は、下の一覧から手動で外してください。</p>
-      <button class="btn btn-primary btn-block" onclick="autoAssignAllNormalPa()">通常PAを全員仮配置する</button>
+      <h2><span class="num">②</span>PAを全員仮配置</h2>
+      <p class="desc">出勤可能日・時間がその枠に完全に一致するPA(レギュラー・通常どちらも)を全員シフトに入れます。PAの希望休は最優先で守られ、絶対に配置されません。多すぎる場合は下の一覧から手動で外してください。</p>
+      <button class="btn btn-primary btn-block" onclick="autoAssignAllPa()">PAを全員仮配置する</button>
     </div>
     ${shortHtml}
     ${paShortHtml}
@@ -1676,7 +1718,7 @@ function viewShift(){
     ${deptHtml}
     ${unmatchedHtml}
     <div class="card">
-      <h2><span class="num">④〜⑦</span>最終確認・手動調整</h2>
+      <h2><span class="num">③</span>最終確認・手動調整</h2>
       <p class="desc">名前をタップすると割り当て/解除を切り替えられます。変更するたびに必要人数・不足・部門・勤務時間は自動再計算されます。</p>
       <div class="segToggle">
         <button class="${filter==='all'?'active':''}" onclick="setShiftFilter('all')">全体</button>
@@ -1692,6 +1734,13 @@ function viewShift(){
 function setShiftFilter(f){ state.shiftViewFilter = f; render(); }
 
 // ---------- レンダリング ----------
+// 時刻ピッカー操作中に毎回すぐ再描画すると、iOSのピッカーが不安定になるため
+// 時刻系の入力はこちらで少し遅らせて再描画する
+let renderDebounceTimer = null;
+function scheduleRender(delay){
+  clearTimeout(renderDebounceTimer);
+  renderDebounceTimer = setTimeout(render, delay || 500);
+}
 function render(){
   renderNav();
   const app = document.getElementById('app');
