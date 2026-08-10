@@ -1428,19 +1428,6 @@ function viewShift(){
       ${staffShortages.map(s=>`<div class="shortItem">${formatSlashDate(s.dateStr)} ${escapeHtml(s.slot.name)} ${formatSlotTime(s.slot)}　必要${s.need}人／現在${s.current}人　不足${s.short}人</div>`).join('')}
     </div>` : '';
 
-  const paStatus = computePaStatusList();
-  const paShortHtml = paStatus.shortList.length ? `
-    <div class="card shortCard">
-      <h2 style="color:#8a2c22;"><span class="num" style="background:#f3c9c4;color:#8a2c22;">不足</span>PAの人数が足りない枠</h2>
-      ${paStatus.shortList.map(s=>`<div class="shortItem">${formatSlashDate(s.dateStr)} ${escapeHtml(s.slot.name)} ${formatSlotTime(s.slot)}　必要${s.need}人／現在${s.current}人　不足${s.short}人</div>`).join('')}
-    </div>` : '';
-  const paExcessHtml = paStatus.excessList.length ? `
-    <div class="card deptWarnCard">
-      <h2 style="color:#7a5410;"><span class="num" style="background:#f3dfb3;color:#7a5410;">多め</span>PAの人数が必要数より多い枠</h2>
-      <p class="desc">出勤可能な人を全員入れた結果、必要数より多くなっています。管理者が手動で調整してください。</p>
-      ${paStatus.excessList.map(s=>`<div class="deptWarnItem">${formatSlashDate(s.dateStr)} ${escapeHtml(s.slot.name)}　必要${s.need}人／現在${s.current}人　(+${s.over}人)</div>`).join('')}
-    </div>` : '';
-
   const deptWarnings = computeDeptWarningsList();
   const deptHtml = deptWarnings.length ? `
     <div class="card deptWarnCard">
@@ -1531,8 +1518,6 @@ function viewShift(){
       <button class="btn btn-primary btn-block" onclick="autoAssignAllPa()">PAを全員仮配置する</button>
     </div>
     ${shortHtml}
-    ${paShortHtml}
-    ${paExcessHtml}
     ${deptHtml}
     ${unmatchedHtml}
     <div class="card">
