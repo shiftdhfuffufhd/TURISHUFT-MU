@@ -1,0 +1,1617 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>つり具屋シフト帳</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@500;700;900&family=Noto+Sans+JP:wght@400;500;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --navy:#16323f; --navy-deep:#0d232d; --cream:#f6f3ec; --card:#ffffff; --line:#dcd6c8;
+    --coral:#e8622c; --coral-deep:#c94f1f; --coral-light:#f0946a; --teal:#2c7873; --amber:#c98a1f; --green:#3f8f5f;
+    --pink:#c9536b; --danger:#c0392b; --ink:#20302f; --sub:#6b7770; --navyChip:#3a5b68;
+  }
+  *{box-sizing:border-box;}
+  body{ margin:0; background:var(--cream); color:var(--ink); font-family:'Noto Sans JP', sans-serif; -webkit-font-smoothing:antialiased; }
+  .brand{ font-family:'Zen Kaku Gothic New', sans-serif; }
+  .mono{ font-family:'IBM Plex Mono', monospace; }
+
+  header{ background:linear-gradient(180deg, var(--navy) 0%, var(--navy-deep) 100%); color:#f2ece0;
+    padding:18px 16px 14px; position:sticky; top:0; z-index:20; box-shadow:0 2px 10px rgba(0,0,0,.15); }
+  .brandRow{ display:flex; align-items:center; gap:10px; }
+  .brandRow h1{ font-family:'Zen Kaku Gothic New', sans-serif; font-weight:900; font-size:19px; margin:0; letter-spacing:.02em; }
+  .brandRow .tagline{ font-size:11px; color:#b9c6c9; margin-top:2px; letter-spacing:.05em; }
+
+  nav{ display:flex; gap:6px; overflow-x:auto; margin-top:14px; padding-bottom:2px; -webkit-overflow-scrolling:touch; scrollbar-width:none; }
+  nav::-webkit-scrollbar{ display:none; }
+  nav button{ flex:0 0 auto; background:rgba(255,255,255,.08); color:#dfe6e2; border:1px solid rgba(255,255,255,.14);
+    padding:8px 14px; border-radius:999px; font-size:13px; font-weight:500; font-family:'Noto Sans JP', sans-serif;
+    white-space:nowrap; cursor:pointer; transition:.15s; }
+  nav button.active{ background:var(--coral); border-color:var(--coral); color:#fff; font-weight:700; }
+
+  main{ max-width:640px; margin:0 auto; padding:18px 14px 60px; }
+  .card{ background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px; margin-bottom:14px; }
+  .card h2{ font-family:'Zen Kaku Gothic New', sans-serif; font-size:16px; margin:0 0 4px; display:flex; align-items:center; gap:8px; }
+  .card h2 .num{ font-family:'IBM Plex Mono', monospace; font-size:11px; color:var(--teal); background:#e7f1ee; border-radius:6px; padding:2px 6px; }
+  .card p.desc{ font-size:12.5px; color:var(--sub); margin:0 0 14px; line-height:1.6; }
+
+  label{ display:block; font-size:12px; color:var(--sub); margin-bottom:4px; font-weight:500; }
+  input[type=text], input[type=number], input[type=month], input[type=time], select{
+    width:100%; padding:10px 11px; border:1px solid var(--line); border-radius:8px; font-size:15px;
+    background:#fcfbf8; color:var(--ink); font-family:'Noto Sans JP', sans-serif; }
+  input:focus, select:focus, button:focus-visible{ outline:2px solid var(--teal); outline-offset:1px; }
+  .row{ display:flex; gap:8px; margin-bottom:10px; }
+  .row > *{ flex:1; }
+
+  .btn{ display:inline-flex; align-items:center; justify-content:center; gap:6px; padding:10px 16px; border-radius:9px;
+    border:none; font-size:14px; font-weight:700; cursor:pointer; font-family:'Noto Sans JP', sans-serif; transition:.15s; }
+  .btn-primary{ background:var(--coral); color:#fff; }
+  .btn-primary:hover{ background:var(--coral-deep); }
+  .btn-navy{ background:var(--navy); color:#fff; }
+  .btn-ghost{ background:transparent; color:var(--teal); border:1px solid var(--teal); }
+  .btn-danger{ background:transparent; color:#b23b3b; border:1px solid #e3b8b8; padding:6px 10px; font-size:12px; }
+  .btn-block{ width:100%; }
+  .btn-sm{ padding:6px 10px; font-size:12px; }
+
+  .empItem{ padding:10px 12px; border:1px solid var(--line); border-radius:10px; margin-bottom:8px; background:#fcfbf8; }
+  .empItem .topRow{ display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap; }
+  .empItem .name{ font-weight:700; font-size:14px; display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+  .empItem .meta{ font-size:11.5px; color:var(--sub); margin-top:2px; }
+  .typeBadge{ font-size:10px; font-weight:700; padding:2px 7px; border-radius:999px; }
+  .typeBadge.staff{ background:#dfe9ea; color:var(--navyChip); }
+  .typeBadge.pa{ background:#f3e3d0; color:var(--coral-deep); }
+  .typeBadge.reg{ background:#e6dcf0; color:#5b3a80; }
+  .deptBadge{ font-size:10px; font-weight:700; padding:2px 7px; border-radius:999px; background:#eee6d8; color:#7a5b1e; }
+
+  .segToggle{ display:flex; gap:6px; margin-bottom:10px; flex-wrap:wrap; }
+  .segToggle button{ flex:1; min-width:70px; padding:7px; border-radius:8px; border:1px solid var(--line); background:#fcfbf8;
+    font-size:12px; font-weight:700; color:var(--sub); cursor:pointer; }
+  .segToggle button.active{ background:var(--navy); color:#fff; border-color:var(--navy); }
+
+  .dayChecks{ display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px; }
+  .dayChip{ padding:6px 10px; border-radius:8px; border:1.5px solid var(--line); font-size:12px; font-weight:700;
+    color:var(--sub); background:#fcfbf8; cursor:pointer; }
+  .dayChip.on{ background:var(--teal); border-color:var(--teal); color:#fff; }
+
+  .staffPanel{ margin-top:10px; padding:10px 12px; border-radius:10px; border:1px dashed var(--line); background:#f6f3ec; }
+  .staffPanel .miniTitle{ font-size:11.5px; font-weight:700; color:var(--sub); margin:8px 0 4px; }
+  .staffPanel .miniTitle:first-child{ margin-top:0; }
+
+  .monthSwitch{ display:flex; align-items:center; justify-content:center; gap:14px; margin-bottom:4px; }
+  .monthSwitch button{ background:#eef1ea; border:1px solid var(--line); border-radius:8px; width:34px; height:34px;
+    font-size:16px; font-weight:700; color:var(--navy); cursor:pointer; }
+  .monthSwitch .label{ font-family:'Zen Kaku Gothic New', sans-serif; font-weight:900; font-size:17px; min-width:130px; text-align:center; }
+
+  table.needTable{ width:100%; border-collapse:collapse; font-size:12px; }
+  table.needTable th, table.needTable td{ border:1px solid var(--line); text-align:center; padding:6px 4px; }
+  table.needTable th{ background:#eef1ea; font-weight:700; font-size:11px; }
+  table.needTable td.rowHead{ text-align:left; padding-left:8px; background:#fcfbf8; font-weight:700; }
+  .dayNumInput{ width:44px; text-align:center; padding:6px 2px; border-radius:6px; border:1px solid var(--line);
+    font-family:'IBM Plex Mono', monospace; font-size:13px; }
+
+  .modeToggle{ display:flex; gap:6px; margin:10px 0 6px; }
+  .modeToggle button{ flex:1; padding:8px; border-radius:8px; border:1px solid var(--line); background:#fcfbf8;
+    font-size:12px; font-weight:700; color:var(--sub); cursor:pointer; }
+  .modeToggle button.active.m-avail{ background:var(--teal); color:#fff; border-color:var(--teal); }
+  .modeToggle button.active.m-off{ background:var(--pink); color:#fff; border-color:var(--pink); }
+
+  .monthCal{ display:grid; grid-template-columns:repeat(7, 1fr); gap:4px; margin-top:6px; }
+  .monthCal .wd{ text-align:center; font-size:10px; color:var(--sub); font-weight:700; padding-bottom:2px; }
+  .monthCal .cell{ aspect-ratio:1/1; display:flex; align-items:center; justify-content:center; border-radius:8px;
+    font-size:12px; font-weight:700; cursor:pointer; border:1.5px solid var(--line); background:#fcfbf8; color:var(--sub); }
+  .monthCal .cell.blank{ visibility:hidden; cursor:default; border:none; }
+  .monthCal .cell.avail{ background:var(--teal); border-color:var(--teal); color:#fff; }
+  .monthCal .cell.off{ background:var(--pink); border-color:var(--pink); color:#fff; }
+  .monthCal .cell.special{ background:var(--amber); border-color:var(--amber); color:#fff; }
+  .monthCal .cell.selected{ box-shadow:0 0 0 2px var(--coral) inset; }
+  .legend{ display:flex; gap:14px; font-size:11px; color:var(--sub); margin-top:10px; flex-wrap:wrap; }
+  .legend span{ display:inline-flex; align-items:center; gap:5px; }
+  .legend .sw{ width:12px; height:12px; border-radius:4px; display:inline-block; }
+
+  .dayDetail{ margin-top:10px; padding:10px 12px; border:1px solid var(--line); border-radius:10px; background:#fcfbf8; }
+  .ddTitle{ font-weight:700; font-size:13px; margin-bottom:6px; }
+  .checkRow{ display:flex; align-items:center; gap:8px; font-size:13px; padding:6px 0; color:var(--ink); }
+  .checkRow.strong{ font-weight:700; }
+  .checkRow input[type=checkbox]{ width:18px; height:18px; accent-color:var(--teal); flex:0 0 auto; }
+  .slotTime{ font-size:11px; color:var(--sub); font-weight:500; }
+
+  .shortCard{ border-left:4px solid var(--danger); background:#fbeceb; }
+  .shortItem{ font-size:12.5px; padding:6px 0; border-bottom:1px dashed #e6bdb8; color:#8a2c22; font-weight:600; }
+  .shortItem:last-child{ border-bottom:none; }
+  .deptWarnCard{ border-left:4px solid var(--amber); background:#fbf3e4; }
+  .deptWarnItem{ font-size:12.5px; padding:6px 0; border-bottom:1px dashed #e6d3ab; color:#7a5410; font-weight:600; }
+  .deptWarnItem:last-child{ border-bottom:none; }
+
+  .dayBlock{ border:1px solid var(--line); border-radius:12px; padding:12px; margin-bottom:12px; background:#fcfbf8; }
+  .dayBlock .dayHead{ display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; }
+  .dayBlock .dateLabel{ font-weight:700; font-size:14px; }
+  .dayBlock .dateLabel .wd{ color:var(--sub); font-weight:500; font-size:11.5px; margin-left:4px; }
+
+  .timeline{ margin:8px 0 12px; }
+  .tlRuler{ display:flex; justify-content:space-between; font-size:9px; color:var(--sub); margin-bottom:4px; padding:0 1px; font-family:'IBM Plex Mono', monospace; }
+  .tlRow{ display:flex; align-items:center; gap:6px; margin-bottom:4px; }
+  .tlName{ width:56px; flex:0 0 auto; font-size:10.5px; font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .tlTrack{ position:relative; flex:1; height:20px; background:#eef1ea; border-radius:5px; }
+  .tlBar{ position:absolute; top:0; height:100%; border-radius:5px; font-size:9px; color:#fff; display:flex;
+    align-items:center; justify-content:center; overflow:hidden; white-space:nowrap; padding:0 2px; }
+  .tlBar.barStaff{ background:var(--navyChip); }
+  .tlBar.barPaRegular{ background:var(--coral); }
+  .tlBar.barPaNormal{ background:var(--coral-light); }
+
+  .slotBlock{ margin-top:8px; padding-top:8px; border-top:1px dashed var(--line); }
+  .slotBlock:first-of-type{ margin-top:0; padding-top:0; border-top:none; }
+  .slotHead{ display:flex; justify-content:space-between; align-items:center; font-size:12.5px; font-weight:700; margin-bottom:6px; }
+  .needBadge{ font-family:'IBM Plex Mono', monospace; font-size:11.5px; padding:3px 9px; border-radius:999px; font-weight:600; }
+  .needBadge.ok{ background:#e3f3e8; color:var(--green); }
+  .needBadge.warn{ background:#f8ddd9; color:var(--danger); }
+  .miniLabel{ font-size:10.5px; color:var(--sub); font-weight:700; margin:4px 0 4px; }
+  .chipRow{ display:flex; flex-wrap:wrap; gap:6px; margin-bottom:2px; }
+  .chip{ padding:6px 11px; border-radius:999px; font-size:11px; font-weight:700; border:1.5px solid var(--line);
+    background:#fff; color:var(--sub); cursor:pointer; }
+  .chip.assignedStaff{ background:var(--navyChip); border-color:var(--navyChip); color:#fff; }
+  .chip.assignedPa{ background:var(--coral); border-color:var(--coral); color:#fff; }
+  .chip.avail{ border-color:var(--teal); color:var(--teal); }
+  .chip.partial{ border-color:var(--amber); color:var(--amber); border-style:dashed; }
+
+  .empty{ text-align:center; padding:30px 10px; color:var(--sub); font-size:13px; }
+  .toast{ position:fixed; left:50%; bottom:22px; transform:translateX(-50%); background:var(--navy-deep); color:#fff;
+    padding:10px 18px; border-radius:999px; font-size:13px; box-shadow:0 4px 16px rgba(0,0,0,.25); opacity:0;
+    pointer-events:none; transition:opacity .25s, transform .25s; z-index:50; }
+  .toast.show{ opacity:1; transform:translateX(-50%) translateY(-4px); }
+
+  @media print{
+    header, nav, .noPrint{ display:none !important; }
+    body{ background:#fff; }
+    main{ max-width:100%; padding:0; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brandRow">
+    <svg width="26" height="26" viewBox="0 0 24 24" fill="none">
+      <path d="M12 2C12 2 9 6 9 10a3 3 0 0 0 6 0c0-4-3-8-3-8Z" fill="#e8622c"/>
+      <path d="M9 14c-3 1-5 4-5 4s4 1 6-1" stroke="#dfe6e2" stroke-width="1.4" stroke-linecap="round"/>
+      <circle cx="12" cy="10" r="1.2" fill="#0d232d"/>
+    </svg>
+    <div>
+      <h1 class="brand">つり具屋シフト帳</h1>
+      <div class="tagline">1店舗・簡易版 / 社員+レギュラーPA+通常PA</div>
+    </div>
+  </div>
+  <nav id="tabNav"></nav>
+</header>
+
+<main id="app"><div class="empty">読み込み中…</div></main>
+<div class="toast" id="toast"></div>
+
+<script>
+/* ========================================================
+   つり具屋シフト帳
+   優先順位: ①社員 → ②レギュラーPA(社員に近い戦力) → ③通常PA(不足を補う候補)
+   すべて「仮案」。最終決定は管理者。社員側の既存ロジックは変更していない。
+   ======================================================== */
+
+const DAYS = [
+  {key:'mon', label:'月'}, {key:'tue', label:'火'}, {key:'wed', label:'水'},
+  {key:'thu', label:'木'}, {key:'fri', label:'金'}, {key:'sat', label:'土'}, {key:'sun', label:'日'}
+];
+const WD_INDEX_TO_KEY = ['sun','mon','tue','wed','thu','fri','sat'];
+const DEFAULT_SLOTS = [
+  {id:'early', name:'早番', start:'04:00', end:'13:00'},
+  {id:'mid',   name:'中番', start:'07:00', end:'16:00'},
+  {id:'late',  name:'遅番', start:'13:00', end:'22:00'},
+  {id:'night', name:'ナイト', start:'22:00', end:'07:00'}
+];
+const DEPTS = [
+  {key:'bait', label:'エサ'}, {key:'lure', label:'ルアー'}, {key:'tackle', label:'釣具'}
+];
+const DEPT_LABEL = {bait:'エサ', lure:'ルアー', tackle:'釣具'};
+const PA_PATTERN_OPTIONS = [
+  {key:'off', label:'休み'}, {key:'morning', label:'朝'}, {key:'noon', label:'昼'},
+  {key:'evening', label:'夕方'}, {key:'allday', label:'終日'}, {key:'custom', label:'個別設定'}
+];
+const PRESET_LABELS = {morning:'朝', noon:'昼', evening:'夕方', allday:'終日'};
+
+let state = {
+  tab: 'home',
+  employees: [],
+  shiftSlots: [],
+  requiredStaff: {},
+  paRequired: {},
+  nightShiftEnabled: true,
+  paPresets: {
+    morning:{start:'09:00', end:'13:00'}, noon:{start:'11:00', end:'17:00'},
+    evening:{start:'17:00', end:'22:00'}, allday:{start:'09:00', end:'22:00'}
+  },
+  month: null,
+  monthData: {availability:{}, shifts:{}, nightRotation:{}},
+  empCalMode: {},
+  empSelectedDate: {},
+  empEditOpen: {},
+  shiftViewFilter: 'all',
+  loaded: false
+};
+
+// ---------- ユーティリティ ----------
+function uid(){ return Math.random().toString(36).slice(2,10); }
+function pad2(n){ return String(n).padStart(2,'0'); }
+function escapeHtml(s){ return (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function toast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  clearTimeout(toast._timer);
+  toast._timer = setTimeout(()=> t.classList.remove('show'), 2200);
+}
+function currentYearMonth(){ const d=new Date(); return `${d.getFullYear()}-${pad2(d.getMonth()+1)}`; }
+function monthLabel(ym){ const [y,m]=ym.split('-'); return `${y}年${Number(m)}月`; }
+function shiftMonth(ym, diff){
+  let [y,m] = ym.split('-').map(Number); m += diff;
+  while(m>12){ m-=12; y++; } while(m<1){ m+=12; y--; }
+  return `${y}-${pad2(m)}`;
+}
+function daysInMonth(ym){ const [y,m]=ym.split('-').map(Number); return new Date(y,m,0).getDate(); }
+function buildMonthDates(ym){ const n=daysInMonth(ym); const out=[]; for(let d=1; d<=n; d++) out.push(`${ym}-${pad2(d)}`); return out; }
+function weekdayKeyOfDate(dateStr){ const d=new Date(dateStr+'T00:00:00'); return WD_INDEX_TO_KEY[d.getDay()]; }
+function weekdayLabelOfDate(dateStr){
+  const map={mon:'月',tue:'火',wed:'水',thu:'木',fri:'金',sat:'土',sun:'日'};
+  return map[weekdayKeyOfDate(dateStr)];
+}
+function formatMD(dateStr){ const [y,m,d]=dateStr.split('-'); return `${Number(m)}月${Number(d)}日`; }
+function formatSlashDate(dateStr){ const [y,m,d]=dateStr.split('-'); return `${Number(m)}/${Number(d)}`; }
+function mondayOf(dateStr){
+  const d = new Date(dateStr + 'T00:00:00'); const day = d.getDay();
+  const diff = (day===0 ? -6 : 1-day); d.setDate(d.getDate()+diff);
+  return d.toISOString().slice(0,10);
+}
+function formatSlotTime(s){
+  const overnight = s.end <= s.start;
+  return overnight ? `${s.start}〜翌${s.end}` : `${s.start}〜${s.end}`;
+}
+function formatRangeSimple(r){
+  if(!r) return '休み';
+  const overnight = r.end<=r.start;
+  return overnight ? `${r.start}〜翌${r.end}` : `${r.start}〜${r.end}`;
+}
+function slotWithinRange(slot, rangeStart, rangeEnd){
+  const overnight = slot.end <= slot.start;
+  if(overnight) return slot.start >= rangeStart;
+  return slot.start >= rangeStart && slot.end <= rangeEnd;
+}
+function normHour(hhmm){ const [h,m]=hhmm.split(':').map(Number); const hh = h<4? h+24 : h; return hh + m/60; }
+function computeWeekKeysOfMonth(ym){ return [...new Set(buildMonthDates(ym).map(mondayOf))]; }
+function nonNightSlots(){ return state.shiftSlots.filter(s=>s.id!=='night'); }
+function nightSlot(){ return state.shiftSlots.find(s=>s.id==='night') || null; }
+function visibleSlots(){ return state.nightShiftEnabled ? state.shiftSlots : nonNightSlots(); }
+
+// ---------- 社員の希望休・予定(会議/半休など) ----------
+function getDayStatus(empId, dateStr){
+  const rec = state.monthData.availability[empId];
+  const base = {available:false, offRequested:false, slots:[], rangeStart:'', rangeEnd:'', specialEntry:null};
+  if(rec && rec[dateStr]) return {...base, ...rec[dateStr]};
+  return base;
+}
+function setDayStatus(empId, dateStr, patch){
+  if(!state.monthData.availability[empId]) state.monthData.availability[empId] = {};
+  const cur = getDayStatus(empId, dateStr);
+  state.monthData.availability[empId][dateStr] = {...cur, ...patch};
+}
+// 2つの時間帯が重なっているか判定(翌日終了にも対応)
+function timesOverlap(aStart, aEnd, bStart, bEnd){
+  let as=normHour(aStart), ae=normHour(aEnd); if(ae<=as) ae+=24;
+  let bs=normHour(bStart), be=normHour(bEnd); if(be<=bs) be+=24;
+  return Math.min(ae,be) - Math.max(as,bs) > 0;
+}
+
+// ---------- PA基本パターン ----------
+function defaultPaPattern(){ const o={}; DAYS.forEach(d=> o[d.key]={type:'off', start:'', end:''}); return o; }
+function getPatternEntry(emp, dayKey){ return (emp.basePattern && emp.basePattern[dayKey]) || {type:'off', start:'', end:''}; }
+function resolveBaseTime(entry){
+  if(!entry || entry.type==='off') return null;
+  if(entry.type==='custom') return (entry.start && entry.end) ? {start:entry.start, end:entry.end} : null;
+  const p = state.paPresets[entry.type];
+  return p ? {start:p.start, end:p.end} : null;
+}
+// PAのその日の実際の状態(個別設定があればそれを優先、なければ基本パターンから算出)
+function paEffectiveStatus(empId, dateStr){
+  const rec = (state.monthData.availability[empId]||{})[dateStr];
+  if(rec && rec.override){
+    return {available:!!rec.available, offRequested:!!rec.offRequested, slots:rec.slots||[], rangeStart:rec.rangeStart||'', rangeEnd:rec.rangeEnd||''};
+  }
+  const e = state.employees.find(x=>x.id===empId);
+  if(!e) return {available:false, offRequested:false, slots:[], rangeStart:'', rangeEnd:''};
+  const resolved = resolveBaseTime(getPatternEntry(e, weekdayKeyOfDate(dateStr)));
+  if(!resolved) return {available:false, offRequested:false, slots:[], rangeStart:'', rangeEnd:''};
+  const slots = state.shiftSlots.filter(s=>slotWithinRange(s, resolved.start, resolved.end)).map(s=>s.id);
+  return {available:true, offRequested:false, slots, rangeStart:resolved.start, rangeEnd:resolved.end};
+}
+async function setPaOverride(empId, dateStr, patch){
+  if(!state.monthData.availability[empId]) state.monthData.availability[empId] = {};
+  const cur = state.monthData.availability[empId][dateStr] || {};
+  const rs = patch.rangeStart!==undefined?patch.rangeStart:cur.rangeStart, re = patch.rangeEnd!==undefined?patch.rangeEnd:cur.rangeEnd;
+  const slots = (rs && re) ? state.shiftSlots.filter(s=>slotWithinRange(s,rs,re)).map(s=>s.id) : (cur.slots||[]);
+  state.monthData.availability[empId][dateStr] = {...cur, ...patch, slots, override:true};
+  await saveMonth(); render();
+}
+async function resetPaOverride(empId, dateStr){
+  if(state.monthData.availability[empId]) delete state.monthData.availability[empId][dateStr];
+  await saveMonth(); render();
+}
+
+// ---------- 保存/読み込み(この端末のSafariに保存されます) ----------
+async function loadAll(){
+  try{
+    const raw = localStorage.getItem('shiftapp_settings');
+    if(raw){
+      const v = JSON.parse(raw);
+      state.employees = (v.employees || []).map(normalizeEmployee);
+      state.shiftSlots = Array.isArray(v.shiftSlots) ? v.shiftSlots : DEFAULT_SLOTS.slice();
+      const sample = v.requiredStaff ? Object.values(v.requiredStaff)[0] : null;
+      state.requiredStaff = (sample && typeof sample === 'object') ? v.requiredStaff : {};
+      const paSample = v.paRequired ? Object.values(v.paRequired)[0] : null;
+      state.paRequired = (paSample && typeof paSample === 'object') ? v.paRequired : {};
+      if(v.paPresets) state.paPresets = {...state.paPresets, ...v.paPresets};
+      if(v.nightShiftEnabled !== undefined) state.nightShiftEnabled = !!v.nightShiftEnabled;
+    }else{
+      state.shiftSlots = DEFAULT_SLOTS.slice();
+    }
+  }catch(e){ state.shiftSlots = DEFAULT_SLOTS.slice(); }
+  DAYS.forEach(d=>{
+    if(!state.requiredStaff[d.key]) state.requiredStaff[d.key] = {};
+    if(!state.paRequired[d.key]) state.paRequired[d.key] = {};
+  });
+  state.month = currentYearMonth();
+  await loadMonth(state.month);
+  state.loaded = true;
+  render();
+}
+function normalizeEmployee(e){
+  const base = { id:e.id, name:e.name, type: e.type==='staff'?'staff':'pa',
+    wage: e.wage||null, maxPerWeek: e.maxPerWeek||null, department: e.department||null };
+  if(base.type==='staff'){
+    return { ...base,
+      workableDays: Array.isArray(e.workableDays) ? e.workableDays : DAYS.map(d=>d.key),
+      workableShifts: Array.isArray(e.workableShifts) ? e.workableShifts : [],
+      shiftRank: e.shiftRank || {}, nightOk: !!e.nightOk, note: e.note || '' };
+  }
+  return { ...base,
+    paType: e.paType==='regular' ? 'regular' : 'normal',
+    basePattern: e.basePattern || defaultPaPattern(),
+    workableShifts: Array.isArray(e.workableShifts) ? e.workableShifts : [],
+    shiftRank: e.shiftRank || {}, nightOk: !!e.nightOk, nightSpecialist: !!e.nightSpecialist,
+    note: e.note || '' };
+}
+async function saveSettings(){
+  try{
+    localStorage.setItem('shiftapp_settings', JSON.stringify({
+      employees: state.employees, shiftSlots: state.shiftSlots, requiredStaff: state.requiredStaff,
+      paRequired: state.paRequired, paPresets: state.paPresets, nightShiftEnabled: state.nightShiftEnabled
+    }));
+  }catch(e){ toast('保存に失敗しました'); }
+}
+async function loadMonth(ym){
+  try{
+    const raw = localStorage.getItem('shiftapp_month_' + ym);
+    state.monthData = raw ? JSON.parse(raw) : {availability:{}, shifts:{}, nightRotation:{}};
+    if(!state.monthData.nightRotation) state.monthData.nightRotation = {};
+  }catch(e){ state.monthData = {availability:{}, shifts:{}, nightRotation:{}}; }
+}
+async function saveMonth(){
+  try{ localStorage.setItem('shiftapp_month_' + state.month, JSON.stringify(state.monthData)); }
+  catch(e){ toast('保存に失敗しました'); }
+}
+async function changeMonth(diff){
+  state.month = shiftMonth(state.month, diff);
+  await loadMonth(state.month);
+  render();
+}
+
+// ---------- タブ ----------
+const TABS = [
+  {key:'home', label:'ホーム'}, {key:'employees', label:'従業員'}, {key:'slots', label:'時間帯'},
+  {key:'need', label:'必要人数'}, {key:'staffOff', label:'社員希望休'}, {key:'paAvail', label:'PA希望シフト'},
+  {key:'shift', label:'シフト作成'}
+];
+function renderNav(){
+  const nav = document.getElementById('tabNav');
+  nav.innerHTML = '';
+  TABS.forEach(t=>{
+    const b = document.createElement('button');
+    b.textContent = t.label;
+    if(t.key === state.tab) b.classList.add('active');
+    b.onclick = ()=>{ state.tab = t.key; render(); };
+    nav.appendChild(b);
+  });
+}
+function goTab(k){ state.tab = k; render(); }
+function monthSwitchHtml(){
+  return `<div class="monthSwitch">
+    <button onclick="changeMonth(-1)" aria-label="前の月">◀</button>
+    <div class="label brand">${monthLabel(state.month)}シフト</div>
+    <button onclick="changeMonth(1)" aria-label="次の月">▶</button>
+  </div>`;
+}
+
+// ---------- ホーム ----------
+function viewHome(){
+  const shortages = computeShortages();
+  const staffCount = state.employees.filter(e=>e.type==='staff').length;
+  const regCount = state.employees.filter(e=>e.type==='pa'&&e.paType==='regular').length;
+  const normCount = state.employees.filter(e=>e.type==='pa'&&e.paType==='normal').length;
+  return `
+    <div class="card">
+      <h2><span class="num">HOME</span>${monthLabel(state.month)}シフトの状況</h2>
+      ${monthSwitchHtml()}
+      <div class="row" style="margin-top:10px;">
+        <div class="card" style="margin:0;text-align:center;padding:14px;">
+          <div class="mono" style="font-size:15px;font-weight:700;color:var(--navyChip)">${staffCount}社員/${regCount}レギュラー/${normCount}通常</div>
+          <div style="font-size:11px;color:var(--sub)">登録人数</div>
+        </div>
+        <div class="card" style="margin:0;text-align:center;padding:14px;">
+          <div class="mono" style="font-size:22px;font-weight:700;color:${shortages.length? 'var(--danger)':'var(--green)'}">${shortages.length}</div>
+          <div style="font-size:11px;color:var(--sub)">人数不足の枠</div>
+        </div>
+      </div>
+    </div>
+    <div class="card"><h2><span class="num">流れ</span>基本の作成手順</h2>
+      <p class="desc">
+        ①社員を登録 → ②社員+レギュラーPAで大枠を自動仮作成 → ③必要人数・部門配置を確認 →
+        ④不足時間帯を計算 → ⑤通常PAの候補を表示 → ⑥管理者が候補を選んで追加 → ⑦最終確認・調整。<br>
+        優先順位は「社員 → レギュラーPA → 通常PA」。すべて仮案です。
+      </p>
+    </div>
+    <div class="card"><h2><span class="num">1</span>従業員を登録する(社員/レギュラーPA/通常PA)</h2>
+      <button class="btn btn-ghost btn-block" onclick="goTab('employees')">従業員管理へ</button></div>
+    <div class="card"><h2><span class="num">2</span>PAの基本勤務パターンを登録する</h2>
+      <button class="btn btn-ghost btn-block" onclick="goTab('paAvail')">PA希望シフトへ</button></div>
+    <div class="card"><h2><span class="num">3</span>シフトを作成する</h2>
+      <button class="btn btn-primary btn-block" onclick="goTab('shift')">シフト作成へ</button></div>
+  `;
+}
+
+// ---------- 従業員管理 ----------
+function staffSummary(e){
+  const days = e.workableDays.map(k=> DAYS.find(d=>d.key===k)?.label || '').join('');
+  const ranked = nonNightSlots().filter(s=> e.workableShifts.includes(s.id))
+    .sort((a,b)=> (e.shiftRank[a.id]||99)-(e.shiftRank[b.id]||99))
+    .map(s=> `第${e.shiftRank[s.id]||'-'}希望:${s.name}`).join(' ');
+  return `部門:${e.department?DEPT_LABEL[e.department]:'未設定'} ・ 曜日:${days||'なし'} ・ ${ranked||'勤務可能シフト未設定'}${state.nightShiftEnabled ? ` ・ ナイト:${e.nightOk?'可':'不可'}` : ''}`;
+}
+function paSummary(e){
+  const deptTxt = e.department ? DEPT_LABEL[e.department] : '特になし';
+  const typeTxt = e.paType==='regular' ? 'レギュラーPA' : '通常PA';
+  const wageTxt = e.wage ? `時給${e.wage}円` : '時給未設定';
+  let extra = '';
+  if(e.paType==='regular'){
+    const ranked = nonNightSlots().filter(s=>e.workableShifts.includes(s.id))
+      .sort((a,b)=>(e.shiftRank[a.id]||99)-(e.shiftRank[b.id]||99)).map(s=>s.name).join('>');
+    extra = ` ・ ${ranked||'希望シフト未設定'}${state.nightShiftEnabled ? ` ・ ナイト:${e.nightSpecialist?'専門':(e.nightOk?'可':'不可')}` : ''}`;
+  }
+  return `${typeTxt} ・ 部門:${deptTxt} ・ ${wageTxt} ・ 週${e.maxPerWeek||'制限なし'}日目安${extra}`;
+}
+function viewEmployees(){
+  const list = state.employees.map(e=>{
+    const badge = e.type==='staff' ? `<span class="typeBadge staff">社員</span>`
+      : `<span class="typeBadge pa">PA</span>${e.paType==='regular'?'<span class="typeBadge reg">レギュラー</span>':''}`;
+    const deptBadge = e.department ? `<span class="deptBadge">${DEPT_LABEL[e.department]}</span>` : '';
+    const metaLine = e.type==='staff' ? staffSummary(e) + (e.maxPerWeek?` ・ 週${e.maxPerWeek}日目安`:'') : paSummary(e);
+    const open = !!state.empEditOpen[e.id];
+    return `
+      <div class="empItem">
+        <div class="topRow">
+          <div class="name">${escapeHtml(e.name)} ${badge}${deptBadge}</div>
+          <div style="display:flex; gap:6px;">
+            <button class="btn btn-ghost btn-sm" onclick="toggleEmpEdit('${e.id}')">${open?'閉じる':'条件を編集'}</button>
+            <button class="btn btn-danger" onclick="removeEmployee('${e.id}')">削除</button>
+          </div>
+        </div>
+        <div class="meta">${metaLine}${e.note ? ' ・ ' + escapeHtml(e.note) : ''}</div>
+        ${open ? (e.type==='staff' ? staffEditPanel(e) : paEditPanel(e)) : ''}
+      </div>`;
+  }).join('') || `<div class="empty">まだ従業員が登録されていません</div>`;
+
+  const slotOptions = nonNightSlots().map(s=>`<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('');
+
+  return `
+    <div class="card"><h2><span class="num">従業員</span>登録済みメンバー</h2>
+      <p class="desc">社員・レギュラーPAは大枠の自動仮作成に使われます。通常PAは基本勤務パターンを登録するだけで、不足時間帯の候補として表示されます。</p>
+      ${list}</div>
+    <div class="card"><h2>新しく登録する</h2>
+      <label>区分</label>
+      <div class="segToggle">
+        <button id="newEmpTypeStaffBtn" class="active" onclick="setNewEmpType('staff')">社員</button>
+        <button id="newEmpTypePaBtn" onclick="setNewEmpType('pa')">PA</button>
+      </div>
+      <input type="hidden" id="newEmpType" value="staff">
+      <label>名前</label>
+      <input type="text" id="newEmpName" placeholder="例: 山田 太郎">
+
+      <div id="newStaffFields">
+        <label>所属部門</label>
+        <div class="segToggle" id="newEmpDeptToggle">
+          ${DEPTS.map((d,i)=>`<button class="${i===0?'active':''}" data-dept="${d.key}" onclick="setNewEmpDept('${d.key}')">${d.label}</button>`).join('')}
+        </div>
+        <input type="hidden" id="newEmpDept" value="${DEPTS[0].key}">
+        <label>勤務可能曜日</label>
+        <div class="dayChecks" id="newEmpDays">
+          ${DAYS.map(d=>`<div class="dayChip on" data-day="${d.key}" onclick="toggleNewEmpDay('${d.key}')">${d.label}</div>`).join('')}
+        </div>
+        <label>シフト適正順位(第1〜第3希望・任意。選ばなかったシフトは「不可」扱い)</label>
+        <div class="row">
+          <div><label>第1希望</label><select id="newEmpPref1"><option value="">なし</option>${slotOptions}</select></div>
+          <div><label>第2希望</label><select id="newEmpPref2"><option value="">なし</option>${slotOptions}</select></div>
+          <div><label>第3希望</label><select id="newEmpPref3"><option value="">なし</option>${slotOptions}</select></div>
+        </div>
+        ${state.nightShiftEnabled ? `<label class="checkRow"><input type="checkbox" id="newEmpNightOk"> ナイト勤務可能</label>` : ''}
+        <label>週の勤務日数(目安・任意)</label>
+        <input type="number" id="newEmpMax" placeholder="5">
+        <label>備考(任意)</label>
+        <input type="text" id="newEmpNote" placeholder="例: 車通勤のみ可">
+      </div>
+
+      <div id="newPaFields" style="display:none;">
+        <label>PA区分</label>
+        <div class="segToggle">
+          <button id="newPaTypeNormalBtn" class="active" onclick="setNewPaType('normal')">通常PA</button>
+          <button id="newPaTypeRegularBtn" onclick="setNewPaType('regular')">レギュラーPA</button>
+        </div>
+        <input type="hidden" id="newPaType" value="normal">
+        <label>所属部門</label>
+        <select id="newPaDept"><option value="">特になし</option>${DEPTS.map(d=>`<option value="${d.key}">${d.label}</option>`).join('')}</select>
+        <div class="row">
+          <div><label>時給(円・任意)</label><input type="number" id="newEmpWage" placeholder="1100"></div>
+          <div><label>週の出勤日数目安(任意)</label><input type="number" id="newEmpMaxPa" placeholder="3"></div>
+        </div>
+        <div id="newPaRegularFields" style="display:none;">
+          <label>勤務可能シフト・適正順位(第1〜第3希望)</label>
+          <div class="row">
+            <div><label>第1希望</label><select id="newPaPref1"><option value="">なし</option>${slotOptions}</select></div>
+            <div><label>第2希望</label><select id="newPaPref2"><option value="">なし</option>${slotOptions}</select></div>
+            <div><label>第3希望</label><select id="newPaPref3"><option value="">なし</option>${slotOptions}</select></div>
+          </div>
+          ${state.nightShiftEnabled ? `
+          <label class="checkRow"><input type="checkbox" id="newPaNightOk"> ナイト勤務可能</label>
+          <label class="checkRow"><input type="checkbox" id="newPaNightSpecialist"> ナイト専門</label>
+          ` : ''}
+        </div>
+        <label>基本勤務可能パターン(曜日ごと)</label>
+        <div id="newPaPatternRows">${renderPaPatternRows('new', newPaPattern, null)}</div>
+      </div>
+      <button class="btn btn-primary btn-block" onclick="addEmployee()">追加する</button>
+    </div>`;
+}
+let newEmpDays = DAYS.map(d=>d.key);
+let newPaPattern = defaultPaPattern();
+function setNewEmpType(t){
+  document.getElementById('newEmpType').value = t;
+  document.getElementById('newEmpTypeStaffBtn').classList.toggle('active', t==='staff');
+  document.getElementById('newEmpTypePaBtn').classList.toggle('active', t==='pa');
+  document.getElementById('newStaffFields').style.display = (t==='staff') ? '' : 'none';
+  document.getElementById('newPaFields').style.display = (t==='pa') ? '' : 'none';
+}
+function setNewPaType(t){
+  document.getElementById('newPaType').value = t;
+  document.getElementById('newPaTypeNormalBtn').classList.toggle('active', t==='normal');
+  document.getElementById('newPaTypeRegularBtn').classList.toggle('active', t==='regular');
+  document.getElementById('newPaRegularFields').style.display = (t==='regular') ? '' : 'none';
+}
+function setNewEmpDept(key){
+  document.getElementById('newEmpDept').value = key;
+  document.querySelectorAll('#newEmpDeptToggle button').forEach(b=> b.classList.toggle('active', b.dataset.dept===key));
+}
+function toggleNewEmpDay(key){
+  const idx = newEmpDays.indexOf(key);
+  if(idx===-1) newEmpDays.push(key); else newEmpDays.splice(idx,1);
+  const el = document.querySelector(`#newEmpDays .dayChip[data-day="${key}"]`);
+  if(el) el.classList.toggle('on');
+}
+function buildShiftRankFromSelects(p1,p2,p3){
+  const rank = {}; [p1,p2,p3].forEach((slotId,i)=>{ if(slotId) rank[slotId]=i+1; });
+  return rank;
+}
+function renderPaPatternRow(scope, dayKey, entry, empId){
+  const changeType = scope==='new' ? `setNewPaPatternType('${dayKey}', this.value)` : `updatePaPatternType('${empId}','${dayKey}', this.value)`;
+  const changeStart = scope==='new' ? `setNewPaPatternCustom('${dayKey}','start',this.value)` : `updatePaPatternCustom('${empId}','${dayKey}','start',this.value)`;
+  const changeEnd = scope==='new' ? `setNewPaPatternCustom('${dayKey}','end',this.value)` : `updatePaPatternCustom('${empId}','${dayKey}','end',this.value)`;
+  const dLabel = DAYS.find(d=>d.key===dayKey).label;
+  const resolved = resolveBaseTime(entry);
+  return `<div class="row" style="align-items:center;" id="${scope}PaPatternRow_${empId||'new'}_${dayKey}">
+    <div style="flex:0 0 26px;font-size:12px;font-weight:700;">${dLabel}</div>
+    <div style="flex:1.3;"><select onchange="${changeType}">
+      ${PA_PATTERN_OPTIONS.map(o=>`<option value="${o.key}" ${entry.type===o.key?'selected':''}>${o.label}</option>`).join('')}
+    </select></div>
+    ${entry.type==='custom' ? `
+      <div style="flex:1;"><input type="time" value="${entry.start||''}" onchange="${changeStart}"></div>
+      <div style="flex:1;"><input type="time" value="${entry.end||''}" onchange="${changeEnd}"></div>
+    ` : `<div style="flex:1.6;font-size:11px;color:var(--sub);">${formatRangeSimple(resolved)}</div>`}
+  </div>`;
+}
+function renderPaPatternRows(scope, patternObj, empId){
+  return DAYS.map(d=> renderPaPatternRow(scope, d.key, patternObj[d.key]||{type:'off',start:'',end:''}, empId)).join('');
+}
+function setNewPaPatternType(dayKey, type){
+  newPaPattern[dayKey] = {...newPaPattern[dayKey], type};
+  const rowEl = document.getElementById(`newPaPatternRow_new_${dayKey}`);
+  if(rowEl) rowEl.outerHTML = renderPaPatternRow('new', dayKey, newPaPattern[dayKey], null);
+}
+function setNewPaPatternCustom(dayKey, field, val){ newPaPattern[dayKey][field] = val; }
+async function updatePaPatternType(empId, dayKey, type){
+  const e = state.employees.find(x=>x.id===empId); if(!e) return;
+  if(!e.basePattern) e.basePattern = defaultPaPattern();
+  if(!e.basePattern[dayKey]) e.basePattern[dayKey] = {type:'off',start:'',end:''};
+  e.basePattern[dayKey].type = type;
+  await saveSettings(); render();
+}
+async function updatePaPatternCustom(empId, dayKey, field, val){
+  const e = state.employees.find(x=>x.id===empId); if(!e) return;
+  e.basePattern[dayKey][field] = val;
+  await saveSettings(); render();
+}
+
+async function addEmployee(){
+  const name = document.getElementById('newEmpName').value.trim();
+  if(!name){ toast('名前を入力してください'); return; }
+  const type = document.getElementById('newEmpType').value;
+  let emp;
+  if(type==='staff'){
+    const p1=document.getElementById('newEmpPref1').value, p2=document.getElementById('newEmpPref2').value, p3=document.getElementById('newEmpPref3').value;
+    const shiftRank = buildShiftRankFromSelects(p1,p2,p3);
+    const max = document.getElementById('newEmpMax').value;
+    emp = { id:uid(), name, type, department: document.getElementById('newEmpDept').value,
+      workableDays: newEmpDays.slice(), workableShifts: Object.keys(shiftRank), shiftRank,
+      nightOk: !!document.getElementById('newEmpNightOk')?.checked,
+      maxPerWeek: max?Number(max):null, note: document.getElementById('newEmpNote').value.trim(), wage:null };
+  }else{
+    const paType = document.getElementById('newPaType').value;
+    const wage = document.getElementById('newEmpWage').value;
+    const max = document.getElementById('newEmpMaxPa').value;
+    const dept = document.getElementById('newPaDept').value || null;
+    let shiftRank = {}, workableShifts = [], nightOk=false, nightSpecialist=false;
+    if(paType==='regular'){
+      const p1=document.getElementById('newPaPref1').value, p2=document.getElementById('newPaPref2').value, p3=document.getElementById('newPaPref3').value;
+      shiftRank = buildShiftRankFromSelects(p1,p2,p3);
+      workableShifts = Object.keys(shiftRank);
+      nightOk = !!document.getElementById('newPaNightOk')?.checked;
+      nightSpecialist = !!document.getElementById('newPaNightSpecialist')?.checked;
+    }
+    emp = { id:uid(), name, type:'pa', paType, department: dept,
+      wage: wage?Number(wage):null, maxPerWeek: max?Number(max):null,
+      basePattern: JSON.parse(JSON.stringify(newPaPattern)),
+      workableShifts, shiftRank, nightOk, nightSpecialist, note:'' };
+    newPaPattern = defaultPaPattern();
+  }
+  state.employees.push(emp);
+  newEmpDays = DAYS.map(d=>d.key);
+  await saveSettings(); render(); toast('従業員を追加しました');
+}
+async function removeEmployee(id){
+  state.employees = state.employees.filter(e=>e.id!==id);
+  await saveSettings(); render(); toast('削除しました');
+}
+function toggleEmpEdit(id){ state.empEditOpen[id] = !state.empEditOpen[id]; render(); }
+function staffEditPanel(e){
+  const slotOptions = (selId)=> nonNightSlots().map(s=>`<option value="${s.id}" ${selId===s.id?'selected':''}>${escapeHtml(s.name)}</option>`).join('');
+  const ranked = Object.keys(e.shiftRank).sort((a,b)=> e.shiftRank[a]-e.shiftRank[b]);
+  const p1=ranked[0]||'', p2=ranked[1]||'', p3=ranked[2]||'';
+  return `
+    <div class="staffPanel">
+      <div class="miniTitle">名前</div>
+      <input type="text" value="${escapeHtml(e.name)}" onchange="updateEmpField('${e.id}','name',this.value)">
+      <div class="miniTitle">所属部門</div>
+      <div class="segToggle">
+        ${DEPTS.map(d=>`<button class="${e.department===d.key?'active':''}" onclick="updateEmpDept('${e.id}','${d.key}')">${d.label}</button>`).join('')}
+      </div>
+      <div class="miniTitle">勤務可能曜日</div>
+      <div class="dayChecks">
+        ${DAYS.map(d=>`<div class="dayChip ${e.workableDays.includes(d.key)?'on':''}" onclick="toggleStaffDay('${e.id}','${d.key}')">${d.label}</div>`).join('')}
+      </div>
+      <div class="miniTitle">シフト適正順位(選ばなかったシフトは不可扱い)</div>
+      <div class="row">
+        <div><label>第1希望</label><select onchange="updateStaffPrefs('${e.id}', this.value, '${p2}', '${p3}')"><option value="">なし</option>${slotOptions(p1)}</select></div>
+        <div><label>第2希望</label><select onchange="updateStaffPrefs('${e.id}', '${p1}', this.value, '${p3}')"><option value="">なし</option>${slotOptions(p2)}</select></div>
+        <div><label>第3希望</label><select onchange="updateStaffPrefs('${e.id}', '${p1}', '${p2}', this.value)"><option value="">なし</option>${slotOptions(p3)}</select></div>
+      </div>
+      ${state.nightShiftEnabled ? `<label class="checkRow"><input type="checkbox" ${e.nightOk?'checked':''} onchange="updateEmpField('${e.id}','nightOk',this.checked,'bool')"> ナイト勤務可能</label>` : ''}
+      <label>週の勤務日数(目安)</label>
+      <input type="number" value="${e.maxPerWeek??''}" onchange="updateEmpField('${e.id}','maxPerWeek',this.value,'num')">
+      <label>備考</label>
+      <input type="text" value="${escapeHtml(e.note)}" onchange="updateEmpField('${e.id}','note',this.value)">
+    </div>`;
+}
+function paEditPanel(e){
+  const slotOptions = (selId)=> nonNightSlots().map(s=>`<option value="${s.id}" ${selId===s.id?'selected':''}>${escapeHtml(s.name)}</option>`).join('');
+  const ranked = Object.keys(e.shiftRank||{}).sort((a,b)=> e.shiftRank[a]-e.shiftRank[b]);
+  const p1=ranked[0]||'', p2=ranked[1]||'', p3=ranked[2]||'';
+  return `
+    <div class="staffPanel">
+      <div class="miniTitle">名前</div>
+      <input type="text" value="${escapeHtml(e.name)}" onchange="updateEmpField('${e.id}','name',this.value)">
+      <div class="miniTitle">PA区分</div>
+      <div class="segToggle">
+        <button class="${e.paType==='normal'?'active':''}" onclick="updatePaType('${e.id}','normal')">通常PA</button>
+        <button class="${e.paType==='regular'?'active':''}" onclick="updatePaType('${e.id}','regular')">レギュラーPA</button>
+      </div>
+      <div class="miniTitle">所属部門</div>
+      <div class="segToggle">
+        <button class="${!e.department?'active':''}" onclick="updateEmpDept('${e.id}','')">特になし</button>
+        ${DEPTS.map(d=>`<button class="${e.department===d.key?'active':''}" onclick="updateEmpDept('${e.id}','${d.key}')">${d.label}</button>`).join('')}
+      </div>
+      ${e.paType==='regular' ? `
+        <div class="miniTitle">勤務可能シフト・適正順位</div>
+        <div class="row">
+          <div><label>第1希望</label><select onchange="updateStaffPrefs('${e.id}', this.value, '${p2}', '${p3}')"><option value="">なし</option>${slotOptions(p1)}</select></div>
+          <div><label>第2希望</label><select onchange="updateStaffPrefs('${e.id}', '${p1}', this.value, '${p3}')"><option value="">なし</option>${slotOptions(p2)}</select></div>
+          <div><label>第3希望</label><select onchange="updateStaffPrefs('${e.id}', '${p1}', '${p2}', this.value)"><option value="">なし</option>${slotOptions(p3)}</select></div>
+        </div>
+        ${state.nightShiftEnabled ? `
+        <label class="checkRow"><input type="checkbox" ${e.nightOk?'checked':''} onchange="updateEmpField('${e.id}','nightOk',this.checked,'bool')"> ナイト勤務可能</label>
+        <label class="checkRow"><input type="checkbox" ${e.nightSpecialist?'checked':''} onchange="updateEmpField('${e.id}','nightSpecialist',this.checked,'bool')"> ナイト専門</label>
+        ` : ''}
+      ` : ''}
+      <div class="miniTitle">基本勤務可能パターン</div>
+      ${renderPaPatternRows('edit', e.basePattern||defaultPaPattern(), e.id)}
+      <div class="miniTitle">時給・週の出勤日数目安</div>
+      <div class="row">
+        <div><input type="number" value="${e.wage??''}" onchange="updateEmpField('${e.id}','wage',this.value,'num')" placeholder="時給"></div>
+        <div><input type="number" value="${e.maxPerWeek??''}" onchange="updateEmpField('${e.id}','maxPerWeek',this.value,'num')" placeholder="週の日数目安"></div>
+      </div>
+      <div class="miniTitle">今月(${monthLabel(state.month)})の実績</div>
+      <div class="meta">${empMonthDays(e.id)}日 ・ ${empMonthHours(e.id).toFixed(1)}時間</div>
+    </div>`;
+}
+async function updatePaType(empId, paType){
+  const e = state.employees.find(x=>x.id===empId); if(!e) return;
+  e.paType = paType;
+  if(paType==='normal'){ e.workableShifts=[]; e.shiftRank={}; e.nightOk=false; e.nightSpecialist=false; }
+  await saveSettings(); render();
+}
+async function updateEmpDept(empId, dept){
+  const e = state.employees.find(x=>x.id===empId); if(!e) return;
+  e.department = dept || null; await saveSettings(); render();
+}
+async function toggleStaffDay(empId, dayKey){
+  const e = state.employees.find(x=>x.id===empId); if(!e) return;
+  const idx = e.workableDays.indexOf(dayKey);
+  if(idx===-1) e.workableDays.push(dayKey); else e.workableDays.splice(idx,1);
+  await saveSettings(); render();
+}
+async function updateStaffPrefs(empId, p1, p2, p3){
+  const e = state.employees.find(x=>x.id===empId); if(!e) return;
+  const rank = buildShiftRankFromSelects(p1,p2,p3);
+  e.shiftRank = rank; e.workableShifts = Object.keys(rank);
+  await saveSettings(); render();
+}
+async function updateEmpField(empId, field, val, kind){
+  const e = state.employees.find(x=>x.id===empId); if(!e) return;
+  if(kind==='bool') e[field] = !!val;
+  else if(kind==='num') e[field] = val ? Number(val) : null;
+  else e[field] = (val||'').trim();
+  await saveSettings(); render();
+}
+
+// ---------- 勤務時間帯管理 ----------
+async function toggleNightShiftEnabled(val){
+  state.nightShiftEnabled = val;
+  await saveSettings(); render();
+}
+function nightToggleCardHtml(){
+  return `<div class="card">
+    <h2><span class="num">設定</span>ナイトシフトの有無</h2>
+    <label class="checkRow strong"><input type="checkbox" ${state.nightShiftEnabled?'checked':''} onchange="toggleNightShiftEnabled(this.checked)"> ナイトシフトを使う店舗である</label>
+    <p class="desc" style="margin:4px 0 0;">OFFにすると、ナイト関連の設定・週間ローテーション・必要人数の入力欄が非表示になります(設定自体は消えないので、後でONに戻せます)。</p>
+  </div>`;
+}
+function viewSlots(){
+  const list = state.shiftSlots.map(s=>`
+    <div class="empItem"><div class="topRow">
+      <div class="name">${escapeHtml(s.name)}${s.id==='night'?' <span class="typeBadge staff">ナイト(特殊ローテーション)</span>':''}</div>
+      <button class="btn btn-danger" onclick="removeSlot('${s.id}')">削除</button></div>
+      <div class="meta">${formatSlotTime(s)}</div>
+    </div>`).join('') || `<div class="empty">まだ勤務時間帯が登録されていません</div>`;
+  return nightToggleCardHtml() + `
+    <div class="card"><h2><span class="num">時間帯</span>登録済みの勤務時間帯</h2>
+      <p class="desc">初期状態は「早番・中番・遅番・ナイト」の4種類固定です(id が night のものはナイトの週間ローテーション対象)。</p>${list}</div>
+    <div class="card"><h2>新しく登録する</h2>
+      <label>名前</label><input type="text" id="newSlotName" placeholder="例: 早番">
+      <div class="row">
+        <div><label>開始時刻</label><input type="time" id="newSlotStart" value="09:00"></div>
+        <div><label>終了時刻</label><input type="time" id="newSlotEnd" value="18:00"></div>
+      </div>
+      <p class="desc" style="margin-top:-4px;">終了時刻が開始時刻と同じか前の場合は「翌日終了」として扱います。</p>
+      <button class="btn btn-primary btn-block" onclick="addSlot()">追加する</button>
+    </div>`;
+}
+async function addSlot(){
+  const name = document.getElementById('newSlotName').value.trim();
+  const start = document.getElementById('newSlotStart').value;
+  const end = document.getElementById('newSlotEnd').value;
+  if(!name || !start || !end){ toast('名前・開始・終了を入力してください'); return; }
+  state.shiftSlots.push({id:uid(), name, start, end});
+  await saveSettings(); render(); toast('勤務時間帯を追加しました');
+}
+async function removeSlot(id){
+  state.shiftSlots = state.shiftSlots.filter(s=>s.id!==id);
+  DAYS.forEach(d=>{ if(state.requiredStaff[d.key]) delete state.requiredStaff[d.key][id]; });
+  Object.values(state.monthData.availability||{}).forEach(rec=>{
+    Object.keys(rec).forEach(dateStr=>{ if(rec[dateStr].slots) rec[dateStr].slots = rec[dateStr].slots.filter(x=>x!==id); });
+  });
+  state.employees.forEach(e=>{ if(e.shiftRank && e.shiftRank[id]) delete e.shiftRank[id]; if(e.workableShifts) e.workableShifts = e.workableShifts.filter(x=>x!==id); });
+  await saveSettings(); await saveMonth(); render(); toast('削除しました');
+}
+
+// ---------- 必要人数 ----------
+function needTableHtml(dataObj, updateFnName){
+  const slots = visibleSlots();
+  const headerCells = slots.map(s=>`<th>${escapeHtml(s.name)}<br><span class="mono" style="font-size:9.5px;">${formatSlotTime(s)}</span></th>`).join('');
+  const rows = DAYS.map(d=>{
+    const cells = slots.map(s=>{
+      const val = (dataObj[d.key] && dataObj[d.key][s.id]) || 0;
+      return `<td><input class="dayNumInput" type="number" min="0" value="${val}" onchange="${updateFnName}('${d.key}','${s.id}', this.value)"></td>`;
+    }).join('');
+    return `<tr><td class="rowHead">${d.label}</td>${cells}</tr>`;
+  }).join('');
+  return `<div style="overflow-x:auto;"><table class="needTable"><thead><tr><th></th>${headerCells}</tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+function viewNeed(){
+  if(state.shiftSlots.length === 0){
+    return `<div class="card"><div class="empty">先に「時間帯」タブで勤務時間帯を登録してください</div>
+      <button class="btn btn-ghost btn-block" onclick="goTab('slots')">時間帯の登録へ</button></div>`;
+  }
+  return `
+    <div class="card">
+      <h2><span class="num">必要人数(社員)</span>曜日 × 時間帯ごとの必須人数</h2>
+      <p class="desc">この人数を必ず満たすように、社員(+不足時はレギュラーPA)で大枠を自動仮作成します。</p>
+      ${needTableHtml(state.requiredStaff, 'updateNeed')}
+    </div>
+    <div class="card">
+      <h2><span class="num">必要人数(PA)</span>曜日 × 時間帯ごとのPA必須人数</h2>
+      <p class="desc">この人数を目安に、出勤可能なPAを配置します。出勤可能なPA全員を一旦仮配置し、多すぎる場合は管理者が手動で調整する運用を想定しています。</p>
+      ${needTableHtml(state.paRequired, 'updatePaRequired')}
+    </div>`;
+}
+async function updateNeed(dayKey, slotId, val){
+  if(!state.requiredStaff[dayKey]) state.requiredStaff[dayKey] = {};
+  state.requiredStaff[dayKey][slotId] = Number(val) || 0;
+  await saveSettings();
+}
+async function updatePaRequired(dayKey, slotId, val){
+  if(!state.paRequired[dayKey]) state.paRequired[dayKey] = {};
+  state.paRequired[dayKey][slotId] = Number(val) || 0;
+  await saveSettings();
+}
+
+// ---------- 社員 希望休 ----------
+function buildStaffCalCells(empId){
+  const ym = state.month; const n = daysInMonth(ym);
+  const firstDay = new Date(`${ym}-01T00:00:00`).getDay();
+  const leading = (firstDay === 0) ? 6 : firstDay - 1;
+  let html = '';
+  for(let i=0;i<leading;i++) html += `<div class="cell blank"></div>`;
+  for(let d=1; d<=n; d++){
+    const dateStr = `${ym}-${pad2(d)}`;
+    const st = getDayStatus(empId, dateStr);
+    let cls = '';
+    if(st.offRequested) cls = 'off';
+    else if(st.specialEntry && st.specialEntry.content) cls = 'special';
+    if(state.empSelectedDate[empId]===dateStr) cls += ' selected';
+    html += `<div class="cell ${cls}" onclick="onStaffCalTap('${empId}','${dateStr}')">${d}</div>`;
+  }
+  return html;
+}
+function onStaffCalTap(empId, dateStr){
+  const mode = state.empCalMode[empId] || 'off';
+  if(mode === 'off'){
+    const st = getDayStatus(empId, dateStr);
+    setDayStatus(empId, dateStr, {offRequested: !st.offRequested});
+    saveMonth(); render();
+  }else{
+    state.empSelectedDate[empId] = dateStr; render();
+  }
+}
+async function updateStaffSpecial(empId, dateStr, field, val){
+  const st = getDayStatus(empId, dateStr);
+  const cur = st.specialEntry || {content:'', start:'', end:''};
+  const specialEntry = {...cur, [field]: val};
+  setDayStatus(empId, dateStr, {specialEntry});
+  await saveMonth(); render();
+}
+async function clearStaffSpecial(empId, dateStr){
+  setDayStatus(empId, dateStr, {specialEntry:null});
+  await saveMonth(); render();
+}
+function staffSpecialPanelHtml(empId, dateStr){
+  const st = getDayStatus(empId, dateStr);
+  const sp = st.specialEntry || {content:'', start:'', end:''};
+  return `
+    <div class="dayDetail">
+      <div class="ddTitle">${formatMD(dateStr)}(${weekdayLabelOfDate(dateStr)}) の予定(会議・半休など)</div>
+      <label>内容</label>
+      <input type="text" value="${escapeHtml(sp.content)}" placeholder="例: 会議、半休" onchange="updateStaffSpecial('${empId}','${dateStr}','content',this.value)">
+      <div class="row" style="margin-top:8px;">
+        <div><label>開始</label><input type="time" value="${sp.start}" onchange="updateStaffSpecial('${empId}','${dateStr}','start',this.value)"></div>
+        <div><label>終了</label><input type="time" value="${sp.end}" onchange="updateStaffSpecial('${empId}','${dateStr}','end',this.value)"></div>
+      </div>
+      <p class="desc" style="margin:6px 0 0;">この時間帯と重なる勤務シフトには、自動仮作成でこの社員を配置しないようにします(シフト作成画面にも表示されます)。</p>
+      ${sp.content ? `<button class="btn btn-ghost btn-sm" style="margin-top:8px;" onclick="clearStaffSpecial('${empId}','${dateStr}')">この予定を削除</button>` : ''}
+    </div>`;
+}
+function viewStaffOff(){
+  const staffList = state.employees.filter(e=>e.type==='staff');
+  if(staffList.length === 0){
+    return `<div class="card"><div class="empty">社員が登録されていません</div>
+      <button class="btn btn-ghost btn-block" onclick="goTab('employees')">従業員管理へ</button></div>`;
+  }
+  const header = `<div class="card">${monthSwitchHtml()}
+    <p class="desc" style="margin:10px 0 0;">曜日・シフトの条件は「従業員」タブで設定します。ここでは「希望休」と「会議・半休などの予定」を登録します。</p></div>`;
+  const cards = staffList.map(e=>{
+    const mode = state.empCalMode[e.id] || 'off';
+    const selectedDate = state.empSelectedDate[e.id];
+    return `
+    <div class="card">
+      <div style="font-weight:700;font-size:14px;">${escapeHtml(e.name)}</div>
+      <div class="meta" style="font-size:11.5px;color:var(--sub);margin-top:2px;">${staffSummary(e)}</div>
+      <div class="modeToggle">
+        <button class="${mode==='off'?'active m-off':''}" onclick="setCalMode('${e.id}','off')">希望休を編集</button>
+        <button class="${mode==='special'?'active m-avail':''}" onclick="setCalMode('${e.id}','special')">予定(会議・半休)を編集</button>
+      </div>
+      <div class="monthCal">${['月','火','水','木','金','土','日'].map(w=>`<div class="wd">${w}</div>`).join('')}${buildStaffCalCells(e.id)}</div>
+      <div class="legend">
+        <span><span class="sw" style="background:var(--pink)"></span>希望休</span>
+        <span><span class="sw" style="background:var(--amber)"></span>予定あり</span>
+      </div>
+      ${(mode==='special' && selectedDate) ? staffSpecialPanelHtml(e.id, selectedDate) : ''}
+    </div>`;
+  }).join('');
+  return header + cards;
+}
+
+// ---------- PA希望シフト(基本パターン + 個別上書き) ----------
+function presetEditorHtml(){
+  const rows = Object.keys(PRESET_LABELS).map(key=>{
+    const p = state.paPresets[key];
+    return `<div class="row" style="align-items:center;">
+      <div style="flex:0 0 34px;font-size:12px;font-weight:700;">${PRESET_LABELS[key]}</div>
+      <div style="flex:1;"><input type="time" value="${p.start}" onchange="updatePaPreset('${key}','start',this.value)"></div>
+      <div style="flex:1;"><input type="time" value="${p.end}" onchange="updatePaPreset('${key}','end',this.value)"></div>
+    </div>`;
+  }).join('');
+  return `<div class="card"><h2><span class="num">プリセット</span>基本時間帯の設定(全PA共通)</h2>
+    <p class="desc">「朝・昼・夕方・終日」の実際の時刻はここで管理者が調整できます。基本パターンで選んでいるPA全員に反映されます。</p>
+    ${rows}</div>`;
+}
+async function updatePaPreset(key, field, val){
+  state.paPresets[key][field] = val; await saveSettings(); render();
+}
+function buildCalendarCells(empId){
+  const ym = state.month; const n = daysInMonth(ym);
+  const firstDay = new Date(`${ym}-01T00:00:00`).getDay();
+  const leading = (firstDay===0)?6:firstDay-1;
+  let html='';
+  for(let i=0;i<leading;i++) html += `<div class="cell blank"></div>`;
+  for(let d=1; d<=n; d++){
+    const dateStr = `${ym}-${pad2(d)}`;
+    const eff = paEffectiveStatus(empId, dateStr);
+    let cls = '';
+    if(eff.offRequested) cls='off'; else if(eff.available) cls='avail';
+    if(state.empSelectedDate[empId]===dateStr) cls += ' selected';
+    html += `<div class="cell ${cls}" onclick="onCalTap('${empId}','${dateStr}')">${d}</div>`;
+  }
+  return html;
+}
+function weekdayHeaderHtml(){ return ['月','火','水','木','金','土','日'].map(w=>`<div class="wd">${w}</div>`).join(''); }
+function onCalTap(empId, dateStr){
+  const mode = state.empCalMode[empId] || 'avail';
+  if(mode === 'avail'){ state.empSelectedDate[empId] = dateStr; render(); }
+  else{
+    const eff = paEffectiveStatus(empId, dateStr);
+    setPaOverride(empId, dateStr, {offRequested: !eff.offRequested, available:eff.available, rangeStart:eff.rangeStart, rangeEnd:eff.rangeEnd});
+  }
+}
+function setCalMode(empId, mode){ state.empCalMode[empId] = mode; render(); }
+async function toggleDayAvailable(empId, dateStr){
+  const eff = paEffectiveStatus(empId, dateStr);
+  await setPaOverride(empId, dateStr, {available: !eff.available, offRequested:eff.offRequested, rangeStart:eff.rangeStart, rangeEnd:eff.rangeEnd});
+}
+async function updatePaRange(empId, dateStr, field, val){
+  const eff = paEffectiveStatus(empId, dateStr);
+  const patch = {available:true, offRequested:eff.offRequested, rangeStart:eff.rangeStart, rangeEnd:eff.rangeEnd};
+  patch[field] = val;
+  await setPaOverride(empId, dateStr, patch);
+}
+function dayDetailHtml(empId, dateStr){
+  const eff = paEffectiveStatus(empId, dateStr);
+  const rec = (state.monthData.availability[empId]||{})[dateStr];
+  const isOverride = !!(rec && rec.override);
+  return `
+    <div class="dayDetail">
+      <div class="ddTitle">${formatMD(dateStr)}(${weekdayLabelOfDate(dateStr)}) ${isOverride?'<span class="typeBadge pa">個別設定</span>':'<span class="typeBadge staff">基本パターン適用</span>'}</div>
+      <label class="checkRow strong"><input type="checkbox" ${eff.available?'checked':''} onchange="toggleDayAvailable('${empId}','${dateStr}')"> 出勤可能</label>
+      ${eff.available ? `
+        <div class="row" style="margin-top:6px;">
+          <div><label>開始</label><input type="time" value="${eff.rangeStart}" onchange="updatePaRange('${empId}','${dateStr}','rangeStart',this.value)"></div>
+          <div><label>終了</label><input type="time" value="${eff.rangeEnd}" onchange="updatePaRange('${empId}','${dateStr}','rangeEnd',this.value)"></div>
+        </div>` : ''}
+      ${isOverride ? `<button class="btn btn-ghost btn-sm" style="margin-top:8px;" onclick="resetPaOverride('${empId}','${dateStr}')">基本パターンに戻す</button>` : ''}
+    </div>`;
+}
+function viewPaAvail(){
+  const paList = state.employees.filter(e=>e.type==='pa');
+  if(paList.length === 0){
+    return `<div class="card"><div class="empty">PAが登録されていません</div>
+      <button class="btn btn-ghost btn-block" onclick="goTab('employees')">従業員管理へ</button></div>`;
+  }
+  const header = presetEditorHtml() + `<div class="card">${monthSwitchHtml()}
+    <p class="desc" style="margin:10px 0 0;">基本勤務パターンは「従業員」タブで登録します。ここでは月間カレンダーで、その月だけ変更したい日を個別に編集できます。日付をタップすると詳細が開きます。「希望休を編集」に切り替えると日付タップで希望休(赤)を登録できます。</p></div>`;
+  const cards = paList.map(e=>{
+    const mode = state.empCalMode[e.id] || 'avail';
+    const selectedDate = state.empSelectedDate[e.id];
+    const badge = e.paType==='regular' ? '<span class="typeBadge reg">レギュラー</span>' : '<span class="typeBadge pa">通常</span>';
+    return `
+      <div class="card">
+        <div style="font-weight:700;font-size:14px;">${escapeHtml(e.name)} ${badge}</div>
+        <div class="modeToggle">
+          <button class="${mode==='avail'?'active m-avail':''}" onclick="setCalMode('${e.id}','avail')">個別設定を編集</button>
+          <button class="${mode==='off'?'active m-off':''}" onclick="setCalMode('${e.id}','off')">希望休を編集</button>
+        </div>
+        <div class="monthCal">${weekdayHeaderHtml()}${buildCalendarCells(e.id)}</div>
+        <div class="legend">
+          <span><span class="sw" style="background:var(--teal)"></span>出勤可能</span>
+          <span><span class="sw" style="background:var(--pink)"></span>希望休</span>
+        </div>
+        ${(mode==='avail' && selectedDate) ? dayDetailHtml(e.id, selectedDate) : ''}
+      </div>`;
+  }).join('');
+  return header + cards;
+}
+
+// ---------- 稼働時間の集計(月間) ----------
+function slotHoursCalc(slot){
+  const [sh,sm]=slot.start.split(':').map(Number), [eh,em]=slot.end.split(':').map(Number);
+  let s=sh*60+sm, e=eh*60+em; if(e<=s) e+=24*60;
+  return Math.round(((e-s)/60)*100)/100;
+}
+function empMonthHours(empId){
+  const shifts = state.monthData.shifts || {};
+  let total = 0;
+  Object.keys(shifts).forEach(dateStr=>{
+    const daySh = shifts[dateStr];
+    Object.keys(daySh).forEach(slotId=>{
+      if((daySh[slotId]||[]).includes(empId)){
+        const slot = state.shiftSlots.find(s=>s.id===slotId);
+        if(slot) total += slotHoursCalc(slot);
+      }
+    });
+  });
+  return total;
+}
+function empMonthDays(empId){
+  const shifts = state.monthData.shifts || {};
+  let count = 0;
+  Object.keys(shifts).forEach(dateStr=>{
+    if(Object.values(shifts[dateStr]).some(arr=>(arr||[]).includes(empId))) count++;
+  });
+  return count;
+}
+
+// ---------- 判定・候補ロジック ----------
+function isStaffCompatible(staffEmp, dateStr, slot){
+  const dayKey = weekdayKeyOfDate(dateStr);
+  if(!staffEmp.workableDays.includes(dayKey)) return false;
+  if(slot.id!=='night' && !staffEmp.workableShifts.includes(slot.id)) return false;
+  if(slot.id==='night' && !staffEmp.nightOk) return false;
+  const st = getDayStatus(staffEmp.id, dateStr);
+  if(st.offRequested) return false;
+  const sp = st.specialEntry;
+  if(sp && sp.content && sp.start && sp.end && timesOverlap(slot.start, slot.end, sp.start, sp.end)) return false;
+  return true;
+}
+function isCandidateCompatible(emp, dateStr, slot){
+  if(emp.type==='staff') return isStaffCompatible(emp, dateStr, slot);
+  if(emp.type==='pa' && emp.paType==='regular'){
+    if(slot.id==='night'){ if(!emp.nightOk) return false; }
+    else if(!(emp.workableShifts||[]).includes(slot.id)) return false;
+    const st = paEffectiveStatus(emp.id, dateStr);
+    if(!st.available || st.offRequested) return false;
+    if(st.rangeStart && st.rangeEnd) return slotWithinRange(slot, st.rangeStart, st.rangeEnd);
+    return true;
+  }
+  return false;
+}
+function getAssigned(dateStr, slotId){
+  return ((state.monthData.shifts[dateStr]||{})[slotId]) || [];
+}
+function staffCandidates(dateStr, slot){
+  const assigned = getAssigned(dateStr, slot.id);
+  return state.employees.filter(e=>e.type==='staff').filter(e=> isStaffCompatible(e, dateStr, slot) || assigned.includes(e.id));
+}
+function regularPaCandidates(dateStr, slot){
+  const assigned = getAssigned(dateStr, slot.id);
+  return state.employees.filter(e=>e.type==='pa'&&e.paType==='regular').filter(e=> isCandidateCompatible(e,dateStr,slot) || assigned.includes(e.id));
+}
+function paMatchType(emp, dateStr, slot){
+  const st = paEffectiveStatus(emp.id, dateStr);
+  if(!st.available || st.offRequested) return null;
+  if(!st.rangeStart || !st.rangeEnd) return null;
+  if(slotWithinRange(slot, st.rangeStart, st.rangeEnd)) return 'full';
+  const slotStartH = normHour(slot.start);
+  let slotEndH = normHour(slot.end); if(slot.end<=slot.start) slotEndH += 24;
+  const rangeStartH = normHour(st.rangeStart);
+  let rangeEndH = normHour(st.rangeEnd); if(st.rangeEnd<=st.rangeStart) rangeEndH += 24;
+  const overlap = Math.min(slotEndH, rangeEndH) - Math.max(slotStartH, rangeStartH);
+  return overlap>0 ? 'partial' : null;
+}
+function normalPaCandidateGroups(dateStr, slot){
+  const assigned = getAssigned(dateStr, slot.id);
+  const full=[], partial=[];
+  state.employees.filter(e=>e.type==='pa'&&e.paType==='normal').forEach(e=>{
+    if(assigned.includes(e.id)){ full.push(e); return; }
+    const m = paMatchType(e, dateStr, slot);
+    if(m==='full') full.push(e); else if(m==='partial') partial.push(e);
+  });
+  return {full, partial};
+}
+function computeStaffShortages(){
+  const dates = buildMonthDates(state.month);
+  const list = [];
+  dates.forEach(dateStr=>{
+    const dayKey = weekdayKeyOfDate(dateStr);
+    visibleSlots().forEach(slot=>{
+      const need = (state.requiredStaff[dayKey]&&state.requiredStaff[dayKey][slot.id])||0;
+      if(need<=0) return;
+      const assigned = getAssigned(dateStr, slot.id).filter(id=>{ const e=state.employees.find(x=>x.id===id); return e&&e.type==='staff'; });
+      if(assigned.length < need) list.push({dateStr, slot, need, current:assigned.length, short:need-assigned.length});
+    });
+  });
+  return list;
+}
+function computePaStatusList(){
+  const dates = buildMonthDates(state.month);
+  const shortList = [], excessList = [];
+  dates.forEach(dateStr=>{
+    const dayKey = weekdayKeyOfDate(dateStr);
+    visibleSlots().forEach(slot=>{
+      const need = (state.paRequired[dayKey]&&state.paRequired[dayKey][slot.id])||0;
+      if(need<=0) return;
+      const assigned = getAssigned(dateStr, slot.id).filter(id=>{ const e=state.employees.find(x=>x.id===id); return e&&e.type==='pa'; });
+      if(assigned.length < need) shortList.push({dateStr, slot, need, current:assigned.length, short:need-assigned.length});
+      else if(assigned.length > need) excessList.push({dateStr, slot, need, current:assigned.length, over:assigned.length-need});
+    });
+  });
+  return {shortList, excessList};
+}
+// 従来互換(全体の不足件数など)
+function computeShortages(){
+  const paStatus = computePaStatusList();
+  return [...computeStaffShortages(), ...paStatus.shortList];
+}
+function computeDeptShortage(dateStr, slot, assignedIds){
+  const req = slot.id==='early' ? ['bait'] : (slot.id==='late' ? ['bait','lure','tackle'] : []);
+  if(req.length===0) return [];
+  const depts = assignedIds.map(id=>{ const e=state.employees.find(x=>x.id===id); return e&&e.department; });
+  return req.filter(d=> !depts.includes(d));
+}
+function computeDeptWarningsList(){
+  const dates = buildMonthDates(state.month);
+  const list = [];
+  dates.forEach(dateStr=>{
+    const dayKey = weekdayKeyOfDate(dateStr);
+    ['early','late'].forEach(slotId=>{
+      const slot = state.shiftSlots.find(s=>s.id===slotId); if(!slot) return;
+      const need = (state.requiredStaff[dayKey]&&state.requiredStaff[dayKey][slotId])||0;
+      if(need<=0) return;
+      const assigned = getAssigned(dateStr, slotId);
+      if(assigned.length===0) return;
+      const missing = computeDeptShortage(dateStr, slot, assigned);
+      missing.forEach(d=> list.push({dateStr, slot, dept:DEPT_LABEL[d]}));
+    });
+  });
+  return list;
+}
+
+async function toggleAssign(empId, dateStr, slotId){
+  if(!state.monthData.shifts[dateStr]) state.monthData.shifts[dateStr] = {};
+  const daySh = state.monthData.shifts[dateStr];
+  if(!daySh[slotId]) daySh[slotId] = [];
+  const wasInThisSlot = daySh[slotId].includes(empId);
+  Object.keys(daySh).forEach(sid=>{ daySh[sid] = (daySh[sid]||[]).filter(id=>id!==empId); });
+  if(!wasInThisSlot) daySh[slotId].push(empId);
+  await saveMonth(); render();
+}
+function hasExistingStaffShifts(){
+  const shifts = state.monthData.shifts||{};
+  return Object.values(shifts).some(daySh=> Object.values(daySh||{}).some(arr=>(arr||[]).some(id=>{
+    const e = state.employees.find(x=>x.id===id); return e && (e.type==='staff' || e.paType==='regular');
+  })));
+}
+
+// ナイトの週間ローテーション
+function ensureNightRotation(){
+  const weeks = computeWeekKeysOfMonth(state.month);
+  const nightStaff = state.employees.filter(e=>e.type==='staff' && e.nightOk);
+  if(!state.monthData.nightRotation) state.monthData.nightRotation = {};
+  const rot = state.monthData.nightRotation;
+  const usedCount = {}; nightStaff.forEach(e=> usedCount[e.id] = Object.values(rot).filter(id=>id===e.id).length);
+  weeks.forEach(wk=>{
+    if(rot[wk] || nightStaff.length===0) return;
+    const pick = nightStaff.slice().sort((a,b)=> (usedCount[a.id]||0)-(usedCount[b.id]||0))[0];
+    rot[wk] = pick.id; usedCount[pick.id] = (usedCount[pick.id]||0)+1;
+  });
+}
+async function setNightRotation(weekKey, empId){
+  if(!state.monthData.nightRotation) state.monthData.nightRotation = {};
+  state.monthData.nightRotation[weekKey] = empId;
+  await saveMonth(); render();
+}
+function nightPersonForDate(dateStr){
+  const wk = mondayOf(dateStr);
+  const nSlot = nightSlot(); if(!nSlot) return null;
+  const primaryId = (state.monthData.nightRotation||{})[wk];
+  const primary = state.employees.find(e=>e.id===primaryId);
+  if(primary && isCandidateCompatible(primary, dateStr, nSlot)) return primary;
+  const altStaff = state.employees.filter(e=>e.type==='staff' && e.nightOk && e.id!==primaryId)
+    .find(e=> isCandidateCompatible(e, dateStr, nSlot));
+  if(altStaff) return altStaff;
+  const regPaNight = state.employees.filter(e=>e.type==='pa' && e.paType==='regular' && e.nightOk)
+    .filter(e=> isCandidateCompatible(e, dateStr, nSlot))
+    .sort((a,b)=> (b.nightSpecialist?1:0)-(a.nightSpecialist?1:0));
+  return regPaNight[0] || null;
+}
+
+function pickForSlot(pool, slot, need, monthCounts, alreadyChosenIds){
+  if(need<=0) return [];
+  const deptReq = slot.id==='early' ? ['bait'] : (slot.id==='late' ? ['bait','lure','tackle'] : []);
+  const alreadyDepts = alreadyChosenIds.map(id=>{ const e=state.employees.find(x=>x.id===id); return e&&e.department; });
+  let chosen = [];
+  deptReq.filter(d=>!alreadyDepts.includes(d)).forEach(dept=>{
+    if(chosen.length>=need) return;
+    const cand = pool.filter(e=> e.department===dept && !chosen.includes(e))
+      .sort((a,b)=> (a.shiftRank[slot.id]||99)-(b.shiftRank[slot.id]||99) || monthCounts[a.id]-monthCounts[b.id]);
+    if(cand[0]) chosen.push(cand[0]);
+  });
+  const remaining = need - chosen.length;
+  if(remaining>0){
+    const rest = pool.filter(e=>!chosen.includes(e))
+      .sort((a,b)=> (a.shiftRank[slot.id]||99)-(b.shiftRank[slot.id]||99) || monthCounts[a.id]-monthCounts[b.id]);
+    chosen = chosen.concat(rest.slice(0, remaining));
+  }
+  return chosen;
+}
+
+// ①②社員+レギュラーPAで大枠を自動仮作成
+async function autoGenerateStaff(){
+  if(hasExistingStaffShifts() && !confirm('既存の社員/レギュラーPAシフト(仮案)を上書きします。よろしいですか？')) return;
+  ensureNightRotation();
+  const dates = buildMonthDates(state.month);
+  const monthCounts = {}; const weeklyCounts = {};
+  const staffList = state.employees.filter(e=>e.type==='staff');
+  const regularPaList = state.employees.filter(e=>e.type==='pa'&&e.paType==='regular');
+  staffList.forEach(e=> monthCounts[e.id]=0);
+  regularPaList.forEach(e=> monthCounts[e.id]=0);
+  if(!state.monthData.shifts) state.monthData.shifts = {};
+
+  dates.forEach(dateStr=>{
+    const dayKey = weekdayKeyOfDate(dateStr);
+    const weekKey = mondayOf(dateStr);
+    if(!weeklyCounts[weekKey]) weeklyCounts[weekKey] = {};
+    if(!state.monthData.shifts[dateStr]) state.monthData.shifts[dateStr] = {};
+    const daySh = state.monthData.shifts[dateStr];
+    // 社員・レギュラーPAの既存割り当てのみリセット(通常PAはそのまま残す)
+    Object.keys(daySh).forEach(slotId=>{
+      daySh[slotId] = (daySh[slotId]||[]).filter(id=>{
+        const emp = state.employees.find(x=>x.id===id);
+        return !(emp && (emp.type==='staff' || emp.paType==='regular'));
+      });
+    });
+    const usedToday = new Set(Object.values(daySh).flat());
+
+    const nSlot = nightSlot();
+    if(nSlot && state.nightShiftEnabled){
+      const need = (state.requiredStaff[dayKey] && state.requiredStaff[dayKey][nSlot.id]) || 0;
+      if(need>0){
+        const person = nightPersonForDate(dateStr);
+        if(person && !usedToday.has(person.id)){
+          if(!daySh[nSlot.id]) daySh[nSlot.id] = [];
+          daySh[nSlot.id] = [...daySh[nSlot.id], person.id];
+          usedToday.add(person.id); monthCounts[person.id]++;
+        }
+      }
+    }
+    state.shiftSlots.filter(s=>s.id!=='night').forEach(slot=>{
+      const need = (state.requiredStaff[dayKey] && state.requiredStaff[dayKey][slot.id]) || 0;
+      if(need<=0) return;
+
+      let staffPool = staffList.filter(e=> !usedToday.has(e.id) && isStaffCompatible(e, dateStr, slot));
+      staffPool = staffPool.filter(e=> !e.maxPerWeek || (weeklyCounts[weekKey][e.id]||0) < e.maxPerWeek);
+      const chosenStaff = pickForSlot(staffPool, slot, need, monthCounts, []);
+      chosenStaff.forEach(e=>{ monthCounts[e.id]++; weeklyCounts[weekKey][e.id]=(weeklyCounts[weekKey][e.id]||0)+1; usedToday.add(e.id); });
+
+      const paNeed = (state.paRequired[dayKey] && state.paRequired[dayKey][slot.id]) || 0;
+      let chosenRegPa = [];
+      if(paNeed>0){
+        let regPool = regularPaList.filter(e=> !usedToday.has(e.id) && isCandidateCompatible(e, dateStr, slot));
+        regPool = regPool.filter(e=> !e.maxPerWeek || (weeklyCounts[weekKey][e.id]||0) < e.maxPerWeek);
+        chosenRegPa = pickForSlot(regPool, slot, paNeed, monthCounts, chosenStaff.map(e=>e.id));
+        chosenRegPa.forEach(e=>{ monthCounts[e.id]++; weeklyCounts[weekKey][e.id]=(weeklyCounts[weekKey][e.id]||0)+1; usedToday.add(e.id); });
+      }
+      if(!daySh[slot.id]) daySh[slot.id] = [];
+      daySh[slot.id] = [...daySh[slot.id], ...chosenStaff.map(e=>e.id), ...chosenRegPa.map(e=>e.id)];
+    });
+  });
+  await saveMonth(); render();
+  toast('社員+レギュラーPAで大枠を仮作成しました(内容を確認・調整してください)');
+}
+
+// 通常PA: 出勤可能な人を全員仮配置(多すぎる場合は管理者が手動で調整する運用)
+async function autoAssignAllNormalPa(){
+  const dates = buildMonthDates(state.month);
+  const normalList = state.employees.filter(e=>e.type==='pa'&&e.paType==='normal');
+  if(!state.monthData.shifts) state.monthData.shifts = {};
+  let addedCount = 0;
+
+  dates.forEach(dateStr=>{
+    const dayKey = weekdayKeyOfDate(dateStr);
+    if(!state.monthData.shifts[dateStr]) state.monthData.shifts[dateStr] = {};
+    const daySh = state.monthData.shifts[dateStr];
+    const usedToday = new Set(Object.values(daySh).flat());
+
+    visibleSlots().forEach(slot=>{
+      const paNeed = (state.paRequired[dayKey] && state.paRequired[dayKey][slot.id]) || 0;
+      if(paNeed<=0) return;
+      const candidates = normalList.filter(e=> !usedToday.has(e.id) && paMatchType(e, dateStr, slot)==='full');
+      if(candidates.length===0) return;
+      if(!daySh[slot.id]) daySh[slot.id] = [];
+      candidates.forEach(e=>{
+        daySh[slot.id].push(e.id); usedToday.add(e.id); addedCount++;
+      });
+    });
+  });
+  await saveMonth(); render();
+  toast(addedCount>0 ? `通常PA ${addedCount}件を仮配置しました(多い場合は手動で調整してください)` : '追加できる候補がありませんでした');
+}
+
+// ---------- タイムライン表示 ----------
+const TL_START = 4, TL_END = 31;
+function timelineHtml(dateStr){
+  const daySh = state.monthData.shifts[dateStr] || {};
+  const filter = state.shiftViewFilter;
+  const rows = [];
+  Object.keys(daySh).forEach(slotId=>{
+    const slot = state.shiftSlots.find(s=>s.id===slotId); if(!slot) return;
+    (daySh[slotId]||[]).forEach(empId=>{
+      const e = state.employees.find(x=>x.id===empId); if(!e) return;
+      if(filter==='staff' && e.type!=='staff') return;
+      if(filter==='pa' && e.type!=='pa') return;
+      rows.push({emp:e, slot});
+    });
+  });
+  if(rows.length===0) return `<div class="empty" style="padding:10px 0;">配置なし</div>`;
+  rows.sort((a,b)=> normHour(a.slot.start)-normHour(b.slot.start));
+  const ruler = `<div class="tlRuler">${[4,7,10,13,16,19,22,1,4].map(h=>`<span>${h}</span>`).join('')}</div>`;
+  const bars = rows.map(r=>{
+    const startH = normHour(r.slot.start);
+    let endH = normHour(r.slot.end); if(r.slot.end<=r.slot.start) endH += 24;
+    const leftPct = ((startH-TL_START)/(TL_END-TL_START))*100;
+    const widthPct = ((endH-startH)/(TL_END-TL_START))*100;
+    const cls = r.emp.type==='staff' ? 'barStaff' : (r.emp.paType==='regular' ? 'barPaRegular' : 'barPaNormal');
+    return `<div class="tlRow">
+      <div class="tlName">${escapeHtml(r.emp.name)}</div>
+      <div class="tlTrack"><div class="tlBar ${cls}" style="left:${leftPct}%; width:${widthPct}%;">${formatSlotTime(r.slot)}</div></div>
+    </div>`;
+  }).join('');
+  return `<div class="timeline">${ruler}${bars}</div>`;
+}
+
+function workloadSummaryHtml(){
+  if(state.employees.length === 0) return '';
+  const rows = state.employees.map(e=>{
+    const hours = empMonthHours(e.id).toFixed(1);
+    const days = empMonthDays(e.id);
+    const badge = e.type==='staff' ? '社員' : (e.paType==='regular'?'レギュラーPA':'通常PA');
+    return `<div class="empItem" style="margin-bottom:6px;padding:8px 10px;">
+      <div class="topRow"><div class="name" style="font-size:12.5px;">${escapeHtml(e.name)} <span class="typeBadge ${e.type}">${badge}</span></div>
+      <div class="mono" style="font-size:12px;color:var(--navyChip);">${days}日 / ${hours}h</div></div>
+    </div>`;
+  }).join('');
+  return `<div class="card"><h2><span class="num">状況</span>今月の勤務日数・時間(自動集計)</h2>${rows}</div>`;
+}
+
+function nightRotationHtml(){
+  if(!state.nightShiftEnabled) return '';
+  const nSlot = nightSlot(); if(!nSlot) return '';
+  ensureNightRotation();
+  const nightStaff = state.employees.filter(e=>e.type==='staff' && e.nightOk);
+  const weeks = computeWeekKeysOfMonth(state.month);
+  const rows = weeks.map(wk=>{
+    const label = `${formatSlashDate(wk)}〜${formatSlashDate((()=>{ const d=new Date(wk+'T00:00:00'); d.setDate(d.getDate()+6); return d.toISOString().slice(0,10); })())}`;
+    const current = (state.monthData.nightRotation||{})[wk] || '';
+    const options = nightStaff.map(e=>`<option value="${e.id}" ${current===e.id?'selected':''}>${escapeHtml(e.name)}</option>`).join('');
+    return `<div class="row"><div style="flex:1.3;"><label>${label}</label></div>
+      <div><select onchange="setNightRotation('${wk}', this.value)">${options || '<option value="">ナイト可の社員なし</option>'}</select></div></div>`;
+  }).join('');
+  return `<div class="card"><h2><span class="num">ナイト</span>週間ローテーション(社員基準)</h2>
+    <p class="desc">週ごとの主担当(社員)を自動割り当て。手動変更も可能。社員だけで対応できない日は、レギュラーPAのナイト可能者(ナイト専門を優先)を自動的に候補にします。</p>
+    ${rows || '<div class="empty">ナイト可能な社員がいません</div>'}</div>`;
+}
+
+function staffSpecialNotesHtml(dateStr){
+  const notes = [];
+  state.employees.filter(e=>e.type==='staff').forEach(e=>{
+    const st = getDayStatus(e.id, dateStr);
+    if(st.specialEntry && st.specialEntry.content){
+      const sp = st.specialEntry;
+      const timeTxt = (sp.start && sp.end) ? `${sp.start}〜${sp.end}` : '';
+      notes.push(`${escapeHtml(e.name)}：${escapeHtml(sp.content)} ${timeTxt}`);
+    }
+  });
+  if(notes.length===0) return '';
+  return `<div class="miniLabel" style="margin-top:2px;">予定</div><div style="font-size:11.5px;color:#7a5410;">${notes.join(' / ')}</div>`;
+}
+function viewShift(){
+  if(state.employees.length === 0){
+    return `<div class="card"><div class="empty">先に従業員を登録してください</div>
+      <button class="btn btn-ghost btn-block" onclick="goTab('employees')">従業員管理へ</button></div>`;
+  }
+  if(state.shiftSlots.length === 0){
+    return `<div class="card"><div class="empty">先に「時間帯」タブで勤務時間帯を登録してください</div>
+      <button class="btn btn-ghost btn-block" onclick="goTab('slots')">時間帯の登録へ</button></div>`;
+  }
+  const staffShortages = computeStaffShortages();
+  const shortHtml = staffShortages.length ? `
+    <div class="card shortCard">
+      <h2 style="color:#8a2c22;"><span class="num" style="background:#f3c9c4;color:#8a2c22;">不足</span>社員の人数が足りない枠</h2>
+      ${staffShortages.map(s=>`<div class="shortItem">${formatSlashDate(s.dateStr)} ${escapeHtml(s.slot.name)} ${formatSlotTime(s.slot)}　必要${s.need}人／現在${s.current}人　不足${s.short}人</div>`).join('')}
+    </div>` : '';
+
+  const paStatus = computePaStatusList();
+  const paShortHtml = paStatus.shortList.length ? `
+    <div class="card shortCard">
+      <h2 style="color:#8a2c22;"><span class="num" style="background:#f3c9c4;color:#8a2c22;">不足</span>PAの人数が足りない枠</h2>
+      ${paStatus.shortList.map(s=>`<div class="shortItem">${formatSlashDate(s.dateStr)} ${escapeHtml(s.slot.name)} ${formatSlotTime(s.slot)}　必要${s.need}人／現在${s.current}人　不足${s.short}人</div>`).join('')}
+    </div>` : '';
+  const paExcessHtml = paStatus.excessList.length ? `
+    <div class="card deptWarnCard">
+      <h2 style="color:#7a5410;"><span class="num" style="background:#f3dfb3;color:#7a5410;">多め</span>PAの人数が必要数より多い枠</h2>
+      <p class="desc">出勤可能な人を全員入れた結果、必要数より多くなっています。管理者が手動で調整してください。</p>
+      ${paStatus.excessList.map(s=>`<div class="deptWarnItem">${formatSlashDate(s.dateStr)} ${escapeHtml(s.slot.name)}　必要${s.need}人／現在${s.current}人　(+${s.over}人)</div>`).join('')}
+    </div>` : '';
+
+  const deptWarnings = computeDeptWarningsList();
+  const deptHtml = deptWarnings.length ? `
+    <div class="card deptWarnCard">
+      <h2 style="color:#7a5410;"><span class="num" style="background:#f3dfb3;color:#7a5410;">部門</span>部門の配置不足</h2>
+      <p class="desc">人数は足りていますが、部門のバランスが崩れています(代替配置で対応してください)。</p>
+      ${deptWarnings.map(w=>`<div class="deptWarnItem">${formatSlashDate(w.dateStr)} ${escapeHtml(w.slot.name)}：${w.dept}担当不足</div>`).join('')}
+    </div>` : '';
+
+  const dates = buildMonthDates(state.month);
+  const filter = state.shiftViewFilter;
+
+  const dayBlocks = dates.map(dateStr=>{
+    const dayKey = weekdayKeyOfDate(dateStr);
+    let anyWarn = false;
+    const slotBlocks = visibleSlots().map(slot=>{
+      const staffNeed = (state.requiredStaff[dayKey] && state.requiredStaff[dayKey][slot.id]) || 0;
+      const paNeed = (state.paRequired[dayKey] && state.paRequired[dayKey][slot.id]) || 0;
+      if(staffNeed <= 0 && paNeed <= 0) return '';
+      const assigned = getAssigned(dateStr, slot.id);
+      const staffAssigned = assigned.filter(id=>{ const e=state.employees.find(x=>x.id===id); return e && e.type==='staff'; });
+      const regAssigned = assigned.filter(id=>{ const e=state.employees.find(x=>x.id===id); return e && e.type==='pa' && e.paType==='regular'; });
+      const normalAssigned = assigned.filter(id=>{ const e=state.employees.find(x=>x.id===id); return e && e.type==='pa' && e.paType==='normal'; });
+      const paAssignedCount = regAssigned.length + normalAssigned.length;
+      const staffOk = staffAssigned.length >= staffNeed;
+      const paOk = paAssignedCount >= paNeed;
+      const paOver = paAssignedCount > paNeed;
+      if(!staffOk || (!paOk && paNeed>0)) anyWarn = true;
+
+      let staffHtml = '';
+      if(filter!=='pa'){
+        const cands = staffCandidates(dateStr, slot);
+        const chips = cands.map(e=>{
+          const isAssigned = staffAssigned.includes(e.id);
+          const rankTxt = slot.id!=='night' && e.shiftRank[slot.id] ? `(第${e.shiftRank[slot.id]}希望)` : '';
+          return `<div class="chip ${isAssigned?'assignedStaff':'avail'}" onclick="toggleAssign('${e.id}','${dateStr}','${slot.id}')">${escapeHtml(e.name)}${rankTxt}</div>`;
+        }).join('') || `<span style="font-size:12px;color:var(--sub)">候補なし</span>`;
+        staffHtml = `<div class="miniLabel">社員(${staffAssigned.length}/${staffNeed})</div><div class="chipRow">${chips}</div>`;
+      }
+      let regPaHtml = '';
+      if(filter!=='staff'){
+        const cands = regularPaCandidates(dateStr, slot);
+        const chips = cands.map(e=>{
+          const isAssigned = regAssigned.includes(e.id);
+          const deptTxt = e.department ? `[${DEPT_LABEL[e.department]}]` : '';
+          const rankTxt = slot.id!=='night' && e.shiftRank[slot.id] ? `(第${e.shiftRank[slot.id]}希望)` : '';
+          return `<div class="chip ${isAssigned?'assignedPa':'avail'}" onclick="toggleAssign('${e.id}','${dateStr}','${slot.id}')">${escapeHtml(e.name)}${deptTxt}${rankTxt}</div>`;
+        }).join('') || `<span style="font-size:12px;color:var(--sub)">候補なし</span>`;
+        regPaHtml = `<div class="miniLabel">レギュラーPA(${regAssigned.length})</div><div class="chipRow">${chips}</div>`;
+      }
+      let normalPaHtml = '';
+      if(filter!=='staff'){
+        const {full, partial} = normalPaCandidateGroups(dateStr, slot);
+        const chip = (e, tag)=>{
+          const isAssigned = normalAssigned.includes(e.id);
+          const st = paEffectiveStatus(e.id, dateStr);
+          const timeTxt = st.rangeStart&&st.rangeEnd ? `(${st.rangeStart}〜${st.rangeEnd})` : '';
+          const deptTxt = e.department ? `[${DEPT_LABEL[e.department]}]` : '';
+          return `<div class="chip ${isAssigned?'assignedPa':(tag?'partial':'avail')}" onclick="toggleAssign('${e.id}','${dateStr}','${slot.id}')">${escapeHtml(e.name)}${deptTxt}${timeTxt}${tag}</div>`;
+        };
+        const fullChips = full.map(e=>chip(e,'')).join('') || `<span style="font-size:12px;color:var(--sub)">候補なし</span>`;
+        const partialChips = partial.length ? `<div class="miniLabel" style="margin-top:6px;">一部時間のみ勤務可能</div><div class="chipRow">${partial.map(e=>chip(e,'(一部)')).join('')}</div>` : '';
+        normalPaHtml = `<div class="miniLabel">通常PA(${normalAssigned.length})</div><div class="chipRow">${fullChips}</div>${partialChips}`;
+      }
+
+      const paBadgeCls = paNeed<=0 ? 'ok' : (paOver ? 'warn' : (paOk ? 'ok' : 'warn'));
+      return `
+        <div class="slotBlock">
+          <div class="slotHead"><span>${escapeHtml(slot.name)} <span class="slotTime">${formatSlotTime(slot)}</span></span>
+            <span>
+              <span class="needBadge ${staffOk?'ok':'warn'}">社員${staffAssigned.length}/${staffNeed}</span>
+              <span class="needBadge ${paBadgeCls}">PA${paAssignedCount}/${paNeed}${paOver?'(多)':''}</span>
+            </span></div>
+          ${staffHtml}${regPaHtml}${normalPaHtml}
+        </div>`;
+    }).join('');
+    if(!slotBlocks.trim()) return '';
+    return `
+      <div class="dayBlock">
+        <div class="dayHead"><div class="dateLabel">${formatMD(dateStr)}<span class="wd">(${weekdayLabelOfDate(dateStr)})</span></div></div>
+        ${timelineHtml(dateStr)}
+        ${staffSpecialNotesHtml(dateStr)}
+        ${slotBlocks}
+      </div>`;
+  }).join('');
+
+  return `
+    <div class="card">${monthSwitchHtml()}</div>
+    <div class="card">
+      <h2><span class="num">①②</span>社員+レギュラーPAで大枠を自動仮作成</h2>
+      <p class="desc">部門・希望休・予定(会議/半休)・勤務可能曜日/シフト・シフト適正順位・ナイトローテーションを、社員→レギュラーPAの優先順で考慮して仮配置します(あくまで仮案)。通常PAの割り当てには影響しません。再作成時は上書き確認が出ます。</p>
+      <button class="btn btn-navy btn-block" onclick="autoGenerateStaff()">大枠を仮作成する</button>
+    </div>
+    ${nightRotationHtml()}
+    <div class="card">
+      <h2><span class="num">③</span>通常PAを全員仮配置</h2>
+      <p class="desc">PA必要人数が設定されている枠に対して、その日出勤可能な通常PAを一旦全員シフトに入れます。必要人数より多くなった場合は、下の一覧から手動で外してください。</p>
+      <button class="btn btn-primary btn-block" onclick="autoAssignAllNormalPa()">通常PAを全員仮配置する</button>
+    </div>
+    ${shortHtml}
+    ${paShortHtml}
+    ${paExcessHtml}
+    ${deptHtml}
+    <div class="card">
+      <h2><span class="num">④〜⑦</span>最終確認・手動調整</h2>
+      <p class="desc">名前をタップすると割り当て/解除を切り替えられます。変更するたびに必要人数・不足・部門・勤務時間は自動再計算されます。</p>
+      <div class="segToggle">
+        <button class="${filter==='all'?'active':''}" onclick="setShiftFilter('all')">全体</button>
+        <button class="${filter==='staff'?'active':''}" onclick="setShiftFilter('staff')">社員のみ</button>
+        <button class="${filter==='pa'?'active':''}" onclick="setShiftFilter('pa')">PAのみ</button>
+      </div>
+      ${dayBlocks}
+      <button class="btn btn-ghost btn-block noPrint" style="margin-top:6px;" onclick="window.print()">印刷 / PDF出力</button>
+    </div>
+    ${workloadSummaryHtml()}
+  `;
+}
+function setShiftFilter(f){ state.shiftViewFilter = f; render(); }
+
+// ---------- レンダリング ----------
+function render(){
+  renderNav();
+  const app = document.getElementById('app');
+  if(!state.loaded){ app.innerHTML = `<div class="empty">読み込み中…</div>`; return; }
+  switch(state.tab){
+    case 'home': app.innerHTML = viewHome(); break;
+    case 'employees': app.innerHTML = viewEmployees(); break;
+    case 'slots': app.innerHTML = viewSlots(); break;
+    case 'need': app.innerHTML = viewNeed(); break;
+    case 'staffOff': app.innerHTML = viewStaffOff(); break;
+    case 'paAvail': app.innerHTML = viewPaAvail(); break;
+    case 'shift': app.innerHTML = viewShift(); break;
+  }
+}
+
+loadAll();
+</script>
+</body>
+</html>
