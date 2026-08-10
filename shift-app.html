@@ -1315,30 +1315,33 @@ async function autoGenerateStaff(){
 }
 
 // PA(レギュラー・通常どちらも): 出勤可能日・時間に適合した人を全員仮配置(多すぎる場合は管理者が手動で調整する運用)
+function hasExistingPaShifts(){
+  const shifts = state.monthData.shifts||{};
+  return Object.values(shifts).some(daySh=> Object.values(daySh||{}).some(arr=>(arr||[]).some(id=>{
+    const e = state.employees.find(x=>x.id===id); return e && e.type==='pa';
+  })));
+}
 async function autoAssignAllPa(){
+  if(hasExistingPaShifts() && !confirm('既存のPAシフト(仮案)を全てリセットして作り直します。手動で調整した内容も消えます。よろしいですか？')) return;
   const dates = buildMonthDates(state.month);
   const paList = state.employees.filter(e=>e.type==='pa');
   if(!state.monthData.shifts) state.monthData.shifts = {};
-  let addedCount = 0, removedCount = 0;
+  let addedCount = 0;
 
   dates.forEach(dateStr=>{
     if(!state.monthData.shifts[dateStr]) state.monthData.shifts[dateStr] = {};
     const daySh = state.monthData.shifts[dateStr];
 
-    // 先に、既に配置されているPAの中で希望休になった人を外す(希望休は絶対厳守のため)
+    // PAの既存割り当てをリセット(社員はそのまま残す)
     Object.keys(daySh).forEach(slotId=>{
       daySh[slotId] = (daySh[slotId]||[]).filter(id=>{
-        const e = paList.find(x=>x.id===id);
-        if(!e) return true; // 社員はそのまま
-        const st = paEffectiveStatus(e.id, dateStr);
-        if(st.offRequested){
-          removedCount++;
-          if(state.monthData.timeOverrides && state.monthData.timeOverrides[dateStr]) delete state.monthData.timeOverrides[dateStr][id];
-          return false;
-        }
-        return true;
+        const e = state.employees.find(x=>x.id===id);
+        return !(e && e.type==='pa');
       });
     });
+    if(state.monthData.timeOverrides && state.monthData.timeOverrides[dateStr]){
+      paList.forEach(e=> delete state.monthData.timeOverrides[dateStr][e.id]);
+    }
 
     const usedToday = new Set(Object.values(daySh).flat());
     visibleSlots().forEach(slot=>{
@@ -1352,10 +1355,7 @@ async function autoAssignAllPa(){
     });
   });
   await saveMonth(); render();
-  const msgParts = [];
-  if(addedCount>0) msgParts.push(`追加${addedCount}件`);
-  if(removedCount>0) msgParts.push(`希望休のため解除${removedCount}件`);
-  toast(msgParts.length ? `PAのシフトを更新しました(${msgParts.join('・')})` : '変更はありませんでした');
+  toast(addedCount>0 ? `PAシフトを作り直しました(${addedCount}件配置)` : '追加できる候補がありませんでした');
 }
 
 // ---------- タイムライン表示 ----------
@@ -1570,7 +1570,7 @@ function viewShift(){
     ${nightRotationHtml()}
     <div class="card">
       <h2><span class="num">②</span>PAを全員仮配置</h2>
-      <p class="desc">出勤可能日・時間がその枠に完全に一致するPAを全員シフトに入れます(ナイト不可のPAはナイト枠、ナイト専門のPAはナイト以外の枠には出ません)。PAの希望休は最優先で守られ、絶対に配置されません。多すぎる場合は下の一覧から手動で外してください。新しくPAを追加した後にもう一度押せば、既存の配置はそのままに追加分だけ反映されます。</p>
+      <p class="desc">出勤可能日・時間がその枠に完全に一致するPAを全員シフトに入れます(ナイト不可のPAはナイト枠、ナイト専門のPAはナイト以外の枠には出ません)。PAの希望休は最優先で守られ、絶対に配置されません。押すたびに一度リセットして作り直すので、手動で調整した内容は消えます(既存の配置がある場合は確認画面が出ます)。多すぎる場合は下の一覧から手動で外してください。</p>
       <button class="btn btn-primary btn-block" onclick="autoAssignAllPa()">PAを全員仮配置する</button>
     </div>
     ${shortHtml}
