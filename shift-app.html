@@ -1700,10 +1700,16 @@ function fixIsolatedSingleDayStints(monthCounts, weeklyCounts, monthHours){
       if((prevD && isWorkingOnDate(e.id, prevD)) || (nextD && isWorkingOnDate(e.id, nextD))) return; // 既に2連勤以上
       const tryExtend = (d)=>{
         if(!d) return false;
-        const slot = state.shiftSlots.find(s=> (s.id!=='night'||state.nightShiftEnabled)
+        if(e.monthMinDaysOff && (monthCounts[e.id]||0) >= (daysInMonth(state.month) - e.monthMinDaysOff)) return false; // 休み下限を絶対に下回らない
+        const dayShD = state.monthData.shifts[d] || {};
+        const candidateSlots = state.shiftSlots.filter(s=> (s.id!=='night'||state.nightShiftEnabled)
           && isStaffCompatible(e, d, s) && hasEnoughRestInterval(e.id, d, s) && consecutiveIfWorking(e.id, d) <= MAX_CONSECUTIVE_DAYS
           && backwardShiftHours(e.id, d, s) <= MAX_BACKWARD_SHIFT_HOURS);
-        if(!slot) return false;
+        if(candidateSlots.length===0) return false;
+        // 必要人数がまだ埋まっていない枠を優先する。それが無ければ過剰配置を承知の上で候補から選ぶ(最終手段)
+        const staffAssignedCount = (s)=> (dayShD[s.id]||[]).filter(id=>{ const emp=state.employees.find(x=>x.id===id); return emp&&emp.type==='staff'; }).length;
+        const underStaffed = candidateSlots.find(s=> staffAssignedCount(s) < getRequiredCount(d, s.id));
+        const slot = underStaffed || candidateSlots[0];
         if(!state.monthData.shifts[d]) state.monthData.shifts[d] = {};
         if(!state.monthData.shifts[d][slot.id]) state.monthData.shifts[d][slot.id] = [];
         state.monthData.shifts[d][slot.id].push(e.id);
