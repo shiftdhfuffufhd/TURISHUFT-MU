@@ -1488,6 +1488,16 @@ function isWorkingOnDate(empId, dateStr){
   if(!sh) return false;
   return Object.values(sh).some(arr=>(arr||[]).includes(empId));
 }
+// dateStrの前日から遡って、何日連続で休んでいるかを数える(3連休以上を避ける優先順位づけに使用)
+function restStreakLenBefore(empId, dateStr){
+  let len = 0;
+  for(let i=1;i<=10;i++){
+    const d = addDaysToDateStr(dateStr, -i);
+    if(isWorkingOnDate(empId, d)) break;
+    len++;
+  }
+  return len;
+}
 // 月全体で「同一スタッフが同一日に2勤務以上」になっていないか最終チェックする(検知のみ・自動修正はしない)
 function computeDuplicateAssignments(){
   const dates = buildMonthDates(state.month);
@@ -1782,11 +1792,13 @@ function reallocateSurplusStaff(){
 }
 
 // 候補者の並び順: ①シフト適正順位 → ②2連休優先 → ③連勤日数が少ない人 → ④月間勤務時間が少ない人 → ⑤月内出勤日数(勤務負担)が少ない人
-function pickForSlot(pool, slot, need, monthCounts, alreadyChosenIds, restBonusSet, streak, monthHours){
+function pickForSlot(pool, slot, need, monthCounts, alreadyChosenIds, restRankMap, streak, monthHours){
   if(need<=0) return [];
   const deptGroups = deptRulesFor(slot.id);
   const alreadyDepts = alreadyChosenIds.flatMap(id=>{ const e=state.employees.find(x=>x.id===id); return (e&&e.departments)||[]; });
-  const restRank = (e)=> (restBonusSet && restBonusSet.has(e.id)) ? 1 : 0;
+  // 休みの連続日数による優先順位: 2日以上休んでいる人は最優先で働かせ(3連休以上を避ける)、
+  // 1日だけ休んでいる人は後回し(2連休を優先させたい)、前日勤務していた人はその中間。
+  const restRank = (e)=> (restRankMap && restRankMap[e.id]!==undefined) ? restRankMap[e.id] : 1;
   // 希望シフトの選択肢が少ない人(他に回してもらえる枠が少ない人)は、
   // 公平性(勤務日数・時間)が同点の場合のみ優先する(公平性より優先させると、選択肢が少ないだけの人に独占されてしまうため)
   const optionCount = (e)=> Object.keys(e.shiftRank||{}).length || 99;
@@ -1857,10 +1869,15 @@ async function autoGenerateStaff(){
       weeklyCounts[weekKey][e.id] = (weeklyCounts[weekKey][e.id]||0)+1;
     });
 
-    // 2連休優先: 前日休みだった社員の集合(今日もできれば休ませたい)
-    const yesterdaySh = state.monthData.shifts[addDaysToDateStr(dateStr, -1)] || {};
-    const workedYesterday = new Set(Object.values(yesterdaySh).flat());
-    const restBonusSet = new Set(staffList.filter(e=> !workedYesterday.has(e.id)).map(e=>e.id));
+    // 休みの連続日数による優先順位マップを作る:
+    // 2日以上休んでいる人→0(最優先で働かせ、3連休以上を避ける)
+    // 1日だけ休んでいる人→2(後回しにして2連休を優先させたい)
+    // 前日勤務していた人→1(中間)
+    const restRankMap = {};
+    staffList.forEach(e=>{
+      const rl = restStreakLenBefore(e.id, dateStr);
+      restRankMap[e.id] = rl>=2 ? 0 : (rl===1 ? 2 : 1);
+    });
 
     const nSlot = nightSlot();
     if(nSlot && state.nightShiftEnabled){
@@ -1882,7 +1899,7 @@ async function autoGenerateStaff(){
           nightPool = nightPool.filter(e=> !e.monthMinDaysOff || (monthCounts[e.id]||0) < (daysInMonth(state.month) - e.monthMinDaysOff));
           nightPool = nightPool.filter(e=> hasEnoughRestInterval(e.id, dateStr, nSlot));
           nightPool = nightPool.filter(e=> (streak[e.id]||0) < MAX_CONSECUTIVE_DAYS);
-          const moreNight = pickForSlot(nightPool, nSlot, remainingNightNeed, monthCounts, [], restBonusSet, streak, monthHours);
+          const moreNight = pickForSlot(nightPool, nSlot, remainingNightNeed, monthCounts, [], restRankMap, streak, monthHours);
           moreNight.forEach(e=>{
             chosenNight.push(e); usedToday.add(e.id); monthCounts[e.id]++;
             monthHours[e.id] = (monthHours[e.id]||0) + slotHoursCalc(nSlot);
@@ -1922,10 +1939,10 @@ async function autoGenerateStaff(){
         // まず「前倒しにならない(同じか後ろ倒し)」候補だけで埋める。それでも足りない場合のみ、
         // 2時間以内の前倒しが必要な候補を最終手段として使う。
         const noBackwardPool = staffPool.filter(e=> backwardShiftHours(e.id, dateStr, slot) <= 0);
-        let chosenStaff = pickForSlot(noBackwardPool, slot, remaining, monthCounts, already, restBonusSet, streak, monthHours);
+        let chosenStaff = pickForSlot(noBackwardPool, slot, remaining, monthCounts, already, restRankMap, streak, monthHours);
         if(chosenStaff.length < remaining){
           const backwardPool = staffPool.filter(e=> !chosenStaff.includes(e));
-          const more = pickForSlot(backwardPool, slot, remaining-chosenStaff.length, monthCounts, already.concat(chosenStaff.map(e=>e.id)), restBonusSet, streak, monthHours);
+          const more = pickForSlot(backwardPool, slot, remaining-chosenStaff.length, monthCounts, already.concat(chosenStaff.map(e=>e.id)), restRankMap, streak, monthHours);
           chosenStaff = chosenStaff.concat(more);
         }
         chosenStaff.forEach(e=>{
@@ -2300,7 +2317,7 @@ function viewShift(){
     <div class="card">${monthSwitchHtml()}</div>
     <div class="card">
       <h2><span class="num">①</span>社員の大枠を自動仮作成</h2>
-      <p class="desc">まず<b>必要人数(下限)を必ず満たす</b>ことを絶対条件とし、それ以上の過剰な自動配置は行いません(不足があれば埋めますが、休みが多い人を無理に追加配置することはしません)。休みが下限+2日を超えている社員がいないかは、下の「状況」カードで赤字表示され、ひと目で確認できます。必要であれば、そこから手動でシフトを追加してください(自動→手動→確認、という流れを想定しています)。部門・希望休(可能な限り)・予定(会議など)・勤務可能曜日/シフト・シフト適正順位・ナイトローテーションを考慮します。<b>最大連勤日数は5日、夜勤(ナイト)の最終日の翌2日間は必ず休みとし、いかなる理由があっても例外を作りません。</b>勤務間隔は14時間以上を確保します。<b>「2連勤以上5連勤以下」もほぼ必須の制約とし、1日だけ孤立して働く形になった場合は前後の日に延長して2連勤以上にします</b>(繁忙期などでどうしても延長できない場合のみ、1日勤務のまま残ることがあります)。<b>前日より開始時刻が遅い(または同じ)枠への移動は自由ですが、前日より開始時刻が早くなる(前倒しになる)移動は、他に候補がいない場合の最終手段のみ、かつ最大2時間までとし、それを超える前倒しは絶対にしません</b>(休みを1日でも挟めばこの制約はリセットされます)。まず全ての枠で第1希望の人だけを対象に埋め、それでも埋まらない枠だけ第2希望、第3希望…の順に対象を広げます。同じ希望順位の候補が複数いる場合は、まず勤務日数・時間の公平性を優先し、それでも並んだ場合にのみ希望シフトの選択肢が少ない人を優先します。5連勤以内・条件を満たす候補がいない場合は、無理に埋めず人員不足として表示します。PAの割り当てには影響しません。再作成時は上書き確認が出ます。従業員を追加・削除した後にもう一度押せば、その内容を反映して作り直せます。</p>
+      <p class="desc">まず<b>必要人数(下限)を必ず満たす</b>ことを絶対条件とし、それ以上の過剰な自動配置は行いません(不足があれば埋めますが、休みが多い人を無理に追加配置することはしません)。休みが下限+2日を超えている社員がいないかは、下の「状況」カードで赤字表示され、ひと目で確認できます。必要であれば、そこから手動でシフトを追加してください(自動→手動→確認、という流れを想定しています)。部門・希望休(可能な限り)・予定(会議など)・勤務可能曜日/シフト・シフト適正順位・ナイトローテーションを考慮します。<b>最大連勤日数は5日、夜勤(ナイト)の最終日の翌2日間は必ず休みとし、いかなる理由があっても例外を作りません。</b>勤務間隔は14時間以上を確保します。<b>「2連勤以上5連勤以下」もほぼ必須の制約とし、1日だけ孤立して働く形になった場合は前後の日に延長して2連勤以上にします</b>(繁忙期などでどうしても延長できない場合のみ、1日勤務のまま残ることがあります)。<b>休みは2連休を基本とし、3連休以上は基本的に作らないよう優先順位づけします</b>(2日休んだ人はそこで区切って働かせることを優先しますが、閑散期など必要人数が少ない日はこの優先順位より人数の少なさが勝るため、3連休以上になることもあります)。<b>前日より開始時刻が遅い(または同じ)枠への移動は自由ですが、前日より開始時刻が早くなる(前倒しになる)移動は、他に候補がいない場合の最終手段のみ、かつ最大2時間までとし、それを超える前倒しは絶対にしません</b>(休みを1日でも挟めばこの制約はリセットされます)。まず全ての枠で第1希望の人だけを対象に埋め、それでも埋まらない枠だけ第2希望、第3希望…の順に対象を広げます。同じ希望順位の候補が複数いる場合は、まず勤務日数・時間の公平性を優先し、それでも並んだ場合にのみ希望シフトの選択肢が少ない人を優先します。5連勤以内・条件を満たす候補がいない場合は、無理に埋めず人員不足として表示します。PAの割り当てには影響しません。再作成時は上書き確認が出ます。従業員を追加・削除した後にもう一度押せば、その内容を反映して作り直せます。</p>
       <button class="btn btn-navy btn-block" onclick="autoGenerateStaff()">社員シフトを仮作成する</button>
     </div>
     ${nightRotationHtml()}
