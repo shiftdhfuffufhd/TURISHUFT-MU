@@ -418,10 +418,12 @@ function normalizeEmployee(e){
   const base = { id:e.id, name:e.name, type: e.type==='staff'?'staff':'pa',
     wage: e.wage||null, maxPerWeek: e.maxPerWeek||null, departments };
   if(base.type==='staff'){
+    const shiftRank = e.shiftRank || {};
+    const freeShifts = Array.isArray(e.freeShifts) ? e.freeShifts : [];
+    const workableShifts = [...new Set([...Object.keys(shiftRank), ...freeShifts])];
     return { ...base,
       workableDays: Array.isArray(e.workableDays) ? e.workableDays : DAYS.map(d=>d.key),
-      workableShifts: Array.isArray(e.workableShifts) ? e.workableShifts : [],
-      shiftRank: e.shiftRank || {}, nightOk: !!e.nightOk, note: e.note || '',
+      workableShifts, shiftRank, freeShifts, nightOk: !!e.nightOk, note: e.note || '',
       monthMinDaysOff: (e.monthMinDaysOff!=null) ? e.monthMinDaysOff : null };
   }
   return { ...base,
@@ -525,7 +527,7 @@ function staffSummary(e){
   const days = e.workableDays.map(k=> DAYS.find(d=>d.key===k)?.label || '').join('');
   const ranked = nonNightSlots().filter(s=> e.workableShifts.includes(s.id))
     .sort((a,b)=> (e.shiftRank[a.id]||99)-(e.shiftRank[b.id]||99))
-    .map(s=> `第${e.shiftRank[s.id]||'-'}希望:${s.name}`).join(' ');
+    .map(s=> e.shiftRank[s.id] ? `第${e.shiftRank[s.id]}希望:${s.name}` : `フリー:${s.name}`).join(' ');
   return `部門:${deptListTxt(e)} ・ 曜日:${days||'なし'} ・ ${ranked||'勤務可能シフト未設定'}${state.nightShiftEnabled ? ` ・ ナイト:${e.nightOk?'可':'不可'}` : ''}`;
 }
 function paSummary(e){
@@ -582,12 +584,17 @@ function viewEmployees(){
         </div>
         <label>シフト適正順位(第1〜第5希望・任意。選ばなかったシフトは「不可」扱い)</label>
         ${prefSelectsHtml('newEmpPref', ['','','','',''])}
+        <label>フリー枠(優先順位なし・対応可能な時間帯。任意)</label>
+        <div class="dayChecks" id="newEmpFreeShifts">
+          ${nonNightSlots().map(s=>`<div class="dayChip" data-slot="${s.id}" onclick="toggleNewEmpFreeShift('${s.id}')">${escapeHtml(s.name)}</div>`).join('')}
+        </div>
+        <p class="desc" style="margin:-4px 0 10px;">「どの時間でも対応できる」時間帯をここで選んでおくと、上の希望順位が全て埋まったあとの最終調整で候補になります(5連勤・勤務間隔・前倒し制限などの必須ルールは全て守った上で配置されます)。</p>
         ${state.nightShiftEnabled ? `<label class="checkRow"><input type="checkbox" id="newEmpNightOk"> ナイト勤務可能</label>` : ''}
         <label>週の勤務日数(目安・任意)</label>
         <input type="number" id="newEmpMax" placeholder="5">
         <label>月の休み日数(下限・任意)</label>
         <input type="number" id="newEmpMinOff" placeholder="8">
-        <p class="desc" style="margin:-4px 0 10px;">自動仮作成では、この休み日数を下回らないようにします。必要人数を満たしたあとも、この日数までは働かせる(休みを使い切る)ように追加配置します。ナイトのローテーションにも適用されます。</p>
+        <p class="desc" style="margin:-4px 0 10px;">自動仮作成では、この休み日数を下回らないようにします(超えたら配置対象から外れます)。それ以上休みが多くても、自動では追加配置しません(下限+2日を超えたら「状況」カードで赤字表示されるので、必要なら手動で追加してください)。ナイトのローテーションにも適用されます。</p>
         <label>備考(任意)</label>
         <input type="text" id="newEmpNote" placeholder="例: 車通勤のみ可">
       </div>
@@ -623,6 +630,7 @@ function viewEmployees(){
 }
 let newEmpDays = DAYS.map(d=>d.key);
 let newEmpDepts = [];
+let newEmpFreeShifts = [];
 let newPaDepts = [];
 function setNewEmpType(t){
   document.getElementById('newEmpType').value = t;
@@ -635,6 +643,12 @@ function toggleNewEmpDept(key){
   const idx = newEmpDepts.indexOf(key);
   if(idx===-1) newEmpDepts.push(key); else newEmpDepts.splice(idx,1);
   const el = document.querySelector(`#newEmpDeptToggle .dayChip[data-dept="${key}"]`);
+  if(el) el.classList.toggle('on');
+}
+function toggleNewEmpFreeShift(slotId){
+  const idx = newEmpFreeShifts.indexOf(slotId);
+  if(idx===-1) newEmpFreeShifts.push(slotId); else newEmpFreeShifts.splice(idx,1);
+  const el = document.querySelector(`#newEmpFreeShifts .dayChip[data-slot="${slotId}"]`);
   if(el) el.classList.toggle('on');
 }
 function toggleNewPaDept(key){
@@ -679,7 +693,7 @@ async function updateStaffPrefsFromDom(empId, idPrefix){
   const e = state.employees.find(x=>x.id===empId); if(!e) return;
   const vals = []; for(let i=1;i<=PREF_LEVELS;i++) vals.push(document.getElementById(idPrefix+i)?.value || '');
   const rank = buildShiftRankFromValues(vals);
-  e.shiftRank = rank; e.workableShifts = Object.keys(rank);
+  e.shiftRank = rank; e.workableShifts = [...new Set([...Object.keys(rank), ...(e.freeShifts||[])])];
   await saveSettings(); render();
 }
 async function updatePaBaseTime(empId, field, val){
@@ -702,10 +716,12 @@ async function addEmployee(){
   if(type==='staff'){
     const prefVals = []; for(let i=1;i<=PREF_LEVELS;i++) prefVals.push(document.getElementById('newEmpPref'+i).value);
     const shiftRank = buildShiftRankFromValues(prefVals);
+    const freeShifts = newEmpFreeShifts.slice();
+    const workableShifts = [...new Set([...Object.keys(shiftRank), ...freeShifts])];
     const max = document.getElementById('newEmpMax').value;
     const minOff = document.getElementById('newEmpMinOff').value;
     emp = { id:uid(), name, type, departments: newEmpDepts.slice(),
-      workableDays: newEmpDays.slice(), workableShifts: Object.keys(shiftRank), shiftRank,
+      workableDays: newEmpDays.slice(), workableShifts, shiftRank, freeShifts,
       nightOk: !!document.getElementById('newEmpNightOk')?.checked,
       maxPerWeek: max?Number(max):null, monthMinDaysOff: minOff?Number(minOff):null,
       note: document.getElementById('newEmpNote').value.trim(), wage:null };
@@ -721,7 +737,7 @@ async function addEmployee(){
   }
   state.employees.push(emp);
   newEmpDays = DAYS.map(d=>d.key);
-  newEmpDepts = []; newPaDepts = [];
+  newEmpDepts = []; newPaDepts = []; newEmpFreeShifts = [];
   await saveSettings(); render(); toast('従業員を追加しました');
 }
 async function removeEmployee(id){
@@ -746,12 +762,17 @@ function staffEditPanel(e){
       </div>
       <div class="miniTitle">シフト適正順位(選ばなかったシフトは不可扱い)</div>
       ${prefSelectsHtml(idPrefix, getRankedArray(e, PREF_LEVELS), `updateStaffPrefsFromDom('${e.id}','${idPrefix}')`)}
+      <div class="miniTitle">フリー枠(優先順位なし・対応可能な時間帯)</div>
+      <div class="dayChecks">
+        ${nonNightSlots().map(s=>`<div class="dayChip ${(e.freeShifts||[]).includes(s.id)?'on':''}" onclick="toggleEmpFreeShift('${e.id}','${s.id}')">${escapeHtml(s.name)}</div>`).join('')}
+      </div>
+      <p class="desc" style="margin:-4px 0 10px;">上の希望順位が全て埋まったあとの最終調整で候補になります(必須ルールは全て守った上で配置)。</p>
       ${state.nightShiftEnabled ? `<label class="checkRow"><input type="checkbox" ${e.nightOk?'checked':''} onchange="updateEmpField('${e.id}','nightOk',this.checked,'bool')"> ナイト勤務可能</label>` : ''}
       <label>週の勤務日数(目安)</label>
       <input type="number" value="${e.maxPerWeek??''}" onchange="updateEmpField('${e.id}','maxPerWeek',this.value,'num')">
       <label>月の休み日数(下限・厳守)</label>
       <input type="number" value="${e.monthMinDaysOff??''}" onchange="updateEmpField('${e.id}','monthMinDaysOff',this.value,'num')">
-      <p class="desc" style="margin:2px 0 8px;">自動仮作成ではこの日数を下回らないようにします。必要人数を満たしたあとも、この日数まで働かせる(休みを使い切る)ように追加配置します。</p>
+      <p class="desc" style="margin:2px 0 8px;">自動仮作成ではこの日数を下回らないようにします(超えたら配置対象から外れます)。それ以上休みが多くても自動では追加配置しません。</p>
       <div class="meta" style="margin:2px 0 8px;">今月(${monthLabel(state.month)})：${empMonthDays(e.id)}日出勤 / ${daysInMonth(state.month)-empMonthDays(e.id)}日休み</div>
       <label>備考</label>
       <input type="text" value="${escapeHtml(e.note)}" onchange="updateEmpField('${e.id}','note',this.value)">
@@ -796,6 +817,14 @@ async function toggleEmpDept(empId, dept){
   if(!e.departments) e.departments = [];
   const idx = e.departments.indexOf(dept);
   if(idx===-1) e.departments.push(dept); else e.departments.splice(idx,1);
+  await saveSettings(); render();
+}
+async function toggleEmpFreeShift(empId, slotId){
+  const e = state.employees.find(x=>x.id===empId); if(!e) return;
+  if(!e.freeShifts) e.freeShifts = [];
+  const idx = e.freeShifts.indexOf(slotId);
+  if(idx===-1) e.freeShifts.push(slotId); else e.freeShifts.splice(idx,1);
+  e.workableShifts = [...new Set([...Object.keys(e.shiftRank||{}), ...e.freeShifts])];
   await saveSettings(); render();
 }
 async function toggleStaffDay(empId, dayKey){
@@ -889,7 +918,11 @@ async function removeSlot(id){
   Object.values(state.monthData.availability||{}).forEach(rec=>{
     Object.keys(rec).forEach(dateStr=>{ if(rec[dateStr].slots) rec[dateStr].slots = rec[dateStr].slots.filter(x=>x!==id); });
   });
-  state.employees.forEach(e=>{ if(e.shiftRank && e.shiftRank[id]) delete e.shiftRank[id]; if(e.workableShifts) e.workableShifts = e.workableShifts.filter(x=>x!==id); });
+  state.employees.forEach(e=>{
+    if(e.shiftRank && e.shiftRank[id]) delete e.shiftRank[id];
+    if(e.freeShifts) e.freeShifts = e.freeShifts.filter(x=>x!==id);
+    if(e.workableShifts) e.workableShifts = e.workableShifts.filter(x=>x!==id);
+  });
   if(state.deptRules) delete state.deptRules[id];
   await saveSettings(); await saveMonth(); render(); toast('削除しました');
 }
