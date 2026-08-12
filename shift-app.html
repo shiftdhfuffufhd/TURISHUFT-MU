@@ -1538,6 +1538,18 @@ function restStreakLenBefore(empId, dateStr){
   }
   return len;
 }
+// dateStrから2日以内に、この人のナイト主担当ブロックが始まる予定かどうか。
+// (ブロック開始直前に通常勤務で5連勤上限に達してしまい、ナイトに入れなくなるのを防ぐため、
+//  該当者は通常勤務の優先順位を下げたい時に使う)
+function isUpcomingNightPrimary(empId, dateStr){
+  const nSlot = nightSlot(); if(!nSlot || !state.nightShiftEnabled) return false;
+  for(let ahead=0; ahead<=2; ahead++){
+    const d = addDaysToDateStr(dateStr, ahead);
+    const bk = nightBlockStartFor(d);
+    if(bk===d && (state.monthData.nightRotation||{})[bk]===empId) return true; // ブロック初日が対象範囲内
+  }
+  return false;
+}
 // dateStrより前で、直近の休みが始まる直前(＝最後に勤務した日)の連続勤務日数を返す。
 // 前日勤務中(休みがまだ始まっていない)の場合は0を返す。
 function precedingWorkStreakLen(empId, dateStr){
@@ -1634,6 +1646,32 @@ function enforceConsecutiveLimitHardStop(){
       }
     });
   });
+  return removed;
+}
+// 勤務間隔14時間ルールの最終防波堤: どの処理が原因であっても、月全体を最後にもう一度チェックし、
+// 違反が残っていれば(2日のうち後の方の勤務を)強制的に取り消す(検知だけでなく実際に修正する)
+function enforceRestIntervalHardStop(){
+  const dates = buildMonthDates(state.month);
+  const staffList = state.employees.filter(e=>e.type==='staff');
+  const removed = [];
+  let changed = true, guard = 0;
+  while(changed && guard<10){
+    changed = false; guard++;
+    staffList.forEach(e=>{
+      dates.forEach((dateStr, idx)=>{
+        if(idx===0) return;
+        const sh = state.monthData.shifts[dateStr]; if(!sh) return;
+        const slotId = Object.keys(sh).find(k=>(sh[k]||[]).includes(e.id));
+        if(!slotId) return;
+        const slot = state.shiftSlots.find(s=>s.id===slotId); if(!slot) return;
+        if(!hasEnoughRestInterval(e.id, dateStr, slot)){
+          sh[slotId] = sh[slotId].filter(id=>id!==e.id);
+          removed.push({emp:e, dateStr});
+          changed = true;
+        }
+      });
+    });
+  }
   return removed;
 }
 // 休み日数の下限を超えて休みすぎている社員を、他の枠へ追加で組み込みバランスを取る(5連勤ルールは例外なし)
@@ -1796,6 +1834,80 @@ function fixIsolatedSingleDayStints(monthCounts, weeklyCounts, monthHours){
 }
 // 3連休以上になっている箇所を見つけ、真ん中あたりの日に、まだ必要人数が埋まっていない枠があれば
 // 割り込ませて分割する(休み下限を下回らない・過剰配置をしないことを守った上で)。
+// ナイトの連続まとまりが3日未満(1〜2日)になっている箇所を見つけ、隣接する担当者に
+// まとめて吸収させる(実際の手動シフトでは3日未満のナイトは作られないため)。
+// 吸収先の担当者が絶対条件(5連勤・勤務間隔・休み下限・週の目安)を満たせる場合のみ実施する。
+function normalizeNightBlockLengths(monthCounts, weeklyCounts, monthHours){
+  const dates = buildMonthDates(state.month);
+  const nSlot = nightSlot(); if(!nSlot || !state.nightShiftEnabled) return 0;
+  const nSlotId = nSlot.id;
+  const totalDays = daysInMonth(state.month);
+  let fixCount = 0;
+
+  function nightPersonAt(idx){
+    const d = dates[idx];
+    const arr = (state.monthData.shifts[d]||{})[nSlotId] || [];
+    return arr[0] || null;
+  }
+  function buildStretches(){
+    const stretches = []; let i=0;
+    while(i<dates.length){
+      const p = nightPersonAt(i);
+      if(!p){ i++; continue; }
+      let j=i;
+      while(j+1<dates.length && nightPersonAt(j+1)===p) j++;
+      stretches.push({person:p, start:i, end:j});
+      i=j+1;
+    }
+    return stretches;
+  }
+  function canCover(empId, idx){
+    const d = dates[idx];
+    const e = state.employees.find(x=>x.id===empId); if(!e) return false;
+    if(isWorkingOnDate(empId, d)) return false; // その日すでに別の枠に入っている場合は吸収させない(重複防止)
+    if(!isStaffCompatible(e, d, nSlot)) return false;
+    if(!hasEnoughRestInterval(empId, d, nSlot)) return false;
+    if(e.monthMinDaysOff && (monthCounts[empId]||0) >= (totalDays - e.monthMinDaysOff)) return false;
+    if(e.maxPerWeek && (weeklyCounts[mondayOf(d)]?.[empId]||0) >= e.maxPerWeek) return false;
+    return true;
+  }
+  function reassignDay(idx, fromId, toId){
+    const d = dates[idx];
+    const arr = state.monthData.shifts[d][nSlotId];
+    const pos = arr.indexOf(fromId); if(pos===-1) return;
+    arr.splice(pos, 1, toId);
+    const hrs = slotHoursCalc(nSlot); const wk = mondayOf(d);
+    monthCounts[fromId]--; monthHours[fromId] -= hrs;
+    monthCounts[toId] = (monthCounts[toId]||0)+1; monthHours[toId] = (monthHours[toId]||0)+hrs;
+    if(!weeklyCounts[wk]) weeklyCounts[wk] = {};
+    weeklyCounts[wk][fromId] = Math.max(0, (weeklyCounts[wk][fromId]||0)-1);
+    weeklyCounts[wk][toId] = (weeklyCounts[wk][toId]||0)+1;
+  }
+  function tryMergeInto(shortSt, target){
+    if(!target) return false;
+    const mergedLen = Math.max(target.end, shortSt.end) - Math.min(target.start, shortSt.start) + 1;
+    if(mergedLen > MAX_CONSECUTIVE_DAYS) return false;
+    for(let idx=shortSt.start; idx<=shortSt.end; idx++){ if(!canCover(target.person, idx)) return false; }
+    for(let idx=shortSt.start; idx<=shortSt.end; idx++) reassignDay(idx, shortSt.person, target.person);
+    return true;
+  }
+
+  let changed = true, guard = 0;
+  while(changed && guard<30){
+    changed = false; guard++;
+    const stretches = buildStretches();
+    for(let s=0; s<stretches.length; s++){
+      const st = stretches[s];
+      if((st.end - st.start + 1) >= 3) continue; // 3日以上ならOK
+      const prev = stretches[s-1], next = stretches[s+1];
+      const prevAdjacent = prev && prev.end === st.start-1 && prev.person!==st.person;
+      const nextAdjacent = next && next.start === st.end+1 && next.person!==st.person;
+      if(prevAdjacent && tryMergeInto(st, prev)){ fixCount++; changed=true; break; }
+      if(nextAdjacent && tryMergeInto(st, next)){ fixCount++; changed=true; break; }
+    }
+  }
+  return fixCount;
+}
 function breakUpLongRestStreaks(monthCounts, weeklyCounts, monthHours){
   const dates = buildMonthDates(state.month);
   const staffList = state.employees.filter(e=>e.type==='staff');
@@ -1912,7 +2024,8 @@ function rebalanceMonthWide(monthCounts, weeklyCounts, monthHours){
           const ok = computeConsecutiveViolations().length===0
             && computeDuplicateAssignments().length===0
             && !isInNightRecovery(inEmp.id, dateStr, slot)
-            && !needsExtraRestAfterLongStreak(inEmp.id, dateStr);
+            && !needsExtraRestAfterLongStreak(inEmp.id, dateStr)
+            && hasEnoughRestInterval(inEmp.id, dateStr, slot); // 二重チェック(前後の日との間隔)
           if(ok){ swapCount++; didSwap = true; break; }
           revertSwap(outEmp, inEmp, dateStr, slot);
         }
@@ -2045,7 +2158,7 @@ async function autoGenerateStaff(){
       if(!(sp && sp.content && sp.start && sp.end && (sp.kind||'off')==='required')) return;
       const matchSlot = state.shiftSlots.find(slot=> slotFullyCovers(slot, sp.start, sp.end));
       if(!matchSlot) return; // 完全にカバーする枠がない場合は自動配置しない(不足として警告表示・別枠で対応済み)
-      if((streak[e.id]||0) >= MAX_CONSECUTIVE_DAYS || isInNightRecovery(e.id, dateStr, matchSlot) || needsExtraRestAfterLongStreak(e.id, dateStr)){
+      if((streak[e.id]||0) >= MAX_CONSECUTIVE_DAYS || isInNightRecovery(e.id, dateStr, matchSlot) || needsExtraRestAfterLongStreak(e.id, dateStr) || !hasEnoughRestInterval(e.id, dateStr, matchSlot)){
         requiredConflicts.push({dateStr, emp:e, sp});
         return;
       }
@@ -2060,8 +2173,11 @@ async function autoGenerateStaff(){
     // 2日以上休んでいる人→0(最優先で働かせ、3連休以上を避ける)
     // 1日だけ休んでいる人→2(後回しにして2連休を優先させたい)
     // 前日勤務していた人→1(中間)
+    // ナイトの主担当ブロックが2日以内に始まる人→3(最後回し。通常勤務で連勤上限に達し、
+    //   ナイトに入れなくなるのを防ぐため、ブロック開始前は通常勤務を控えめにする)
     const restRankMap = {};
     staffList.forEach(e=>{
+      if(isUpcomingNightPrimary(e.id, dateStr)){ restRankMap[e.id] = 3; return; }
       const rl = restStreakLenBefore(e.id, dateStr);
       restRankMap[e.id] = rl>=2 ? 0 : (rl===1 ? 2 : 1);
     });
@@ -2166,6 +2282,8 @@ async function autoGenerateStaff(){
   // 月初から順に埋めた結果生じる「月末へのしわ寄せ」「特定個人への集中」を減らす。
   // 必要人数は増減させず、絶対条件を満たす入れ替えのみ適用する。
   const swapCount = rebalanceMonthWide(monthCounts, weeklyCounts, monthHours);
+  // ナイトの短いまとまり(1〜2日)を隣接する担当者に吸収させ、3日未満の断片を作らないようにする
+  const nightNormalizeCount = normalizeNightBlockLengths(monthCounts, weeklyCounts, monthHours);
   // 「2連勤以上5連勤以下」をほぼ必須の制約として、孤立した1日勤務を延長する(必要人数を超える配置は絶対にしない)
   const isolatedFix = fixIsolatedSingleDayStints(monthCounts, weeklyCounts, monthHours);
   // 3連休以上になっている箇所を、可能な範囲で分割する(月末に休みがまとまってしまうのを防ぐ)
@@ -2174,6 +2292,8 @@ async function autoGenerateStaff(){
   // 最終防波堤: 途中のロジックに抜け穴があっても、6連勤以上を絶対に残さないよう強制的に取り消す
   const forcedRemovals = enforceConsecutiveLimitHardStop();
   state.forcedConsecutiveRemovals = forcedRemovals;
+  const forcedRestIntervalRemovals = enforceRestIntervalHardStop();
+  state.forcedRestIntervalRemovals = forcedRestIntervalRemovals;
   // 最終チェック: 同日重複・過剰配置が生じていないか検知して記録(検知のみ・自動修正はしない)
   state.consecutiveViolations = computeConsecutiveViolations();
   state.duplicateAssignments = computeDuplicateAssignments();
@@ -2185,12 +2305,14 @@ async function autoGenerateStaff(){
   const warnParts = [];
   if(requiredConflicts.length) warnParts.push(`要出勤の衝突${requiredConflicts.length}件`);
   if(forcedRemovals.length) warnParts.push(`6連勤防止のため強制取消${forcedRemovals.length}件`);
+  if(forcedRestIntervalRemovals.length) warnParts.push(`勤務間隔14時間ルールのため強制取消${forcedRestIntervalRemovals.length}件`);
   if(state.duplicateAssignments.length) warnParts.push(`同日重複${state.duplicateAssignments.length}件`);
   if(isolatedFix.unfixedCount) warnParts.push(`1日だけの孤立勤務${isolatedFix.unfixedCount}件(延長不可)`);
   const msgBits = [];
   if(filledCount>0) msgBits.push(`不足枠${filledCount}件を充填`);
   if(isolatedFix.fixedCount>0) msgBits.push(`孤立勤務${isolatedFix.fixedCount}件を2連勤に延長`);
   if(swapCount>0) msgBits.push(`月全体の偏りを${swapCount}件調整`);
+  if(nightNormalizeCount>0) msgBits.push(`ナイトの短い断片${nightNormalizeCount}件を統合`);
   if(restStreakFix>0) msgBits.push(`3連休以上${restStreakFix}件を分割`);
   const baseMsg = msgBits.length ? `社員シフトを仮作成しました(${msgBits.join('・')})` : '社員シフトを仮作成しました';
   toast(warnParts.length ? `${baseMsg}(${warnParts.join('・')}。要確認)` : `${baseMsg}(内容を確認・調整してください)`);
@@ -2356,7 +2478,7 @@ function nightRotationHtml(){
       <div><select onchange="setNightRotation('${bk}', this.value)">${options || '<option value="">ナイト可の社員なし</option>'}</select></div></div>`;
   }).join('');
   return `<div class="card"><h2><span class="num">ナイト</span>5連勤単位ローテーション(社員基準)</h2>
-    <p class="desc">月初から5日ずつのブロックで主担当を自動割り当て(暦週とは無関係)。手動変更も可能。当日希望休などで担当できない日や、最大5連勤を超えてしまう日だけ、勤務負担・過去のナイト担当回数が少ない社員に自動的に振り替えます(その場合も最大5連勤・勤務間隔14時間は必ず守ります)。</p>
+    <p class="desc">月初から5日ずつのブロックで主担当を自動割り当て(暦週とは無関係)。手動変更も可能。当日希望休などで担当できない日や、最大5連勤を超えてしまう日だけ、勤務負担・過去のナイト担当回数が少ない社員に自動的に振り替えます(その場合も最大5連勤・勤務間隔14時間は必ず守ります)。<b>通常勤務が「2〜5連勤」を基本とするのに対し、ナイトは「3〜5連勤」を基本とします。</b>代打などで1〜2日だけの短いナイト担当ができた場合、仮作成の最後に前後の担当者へまとめて吸収させ、3日未満の断片を作らないようにします(絶対条件を満たせる場合のみ)。ナイトの最終日の翌2日間は、連勤日数に関わらず必ず休みとし、これは例外を作りません。</p>
     ${rows || '<div class="empty">ナイト可能な社員がいません</div>'}</div>`;
 }
 
@@ -2436,6 +2558,14 @@ function viewShift(){
       <h2 style="color:#7a5410;"><span class="num" style="background:#f3dfb3;color:#7a5410;">強制取消</span>6連勤防止のため取り消した勤務</h2>
       <p class="desc">最大5連勤を絶対に超えないよう、以下の勤務を自動的に取り消しました。該当日・枠は人員不足になっている可能性があるため、候補一覧から手動で対応してください。</p>
       ${forcedRemovals.map(w=>`<div class="deptWarnItem">${escapeHtml(w.emp.name)}：${formatSlashDate(w.dateStr)}の勤務を取消(6連勤目だったため)</div>`).join('')}
+    </div>` : '';
+
+  const forcedRestRemovals = state.forcedRestIntervalRemovals || [];
+  const forcedRestRemovalHtml = forcedRestRemovals.length ? `
+    <div class="card deptWarnCard">
+      <h2 style="color:#7a5410;"><span class="num" style="background:#f3dfb3;color:#7a5410;">強制取消</span>勤務間隔14時間ルールのため取り消した勤務</h2>
+      <p class="desc">前日(または翌日)の勤務からの間隔が14時間未満になるため、以下の勤務を自動的に取り消しました。該当日・枠は人員不足になっている可能性があるため、候補一覧から手動で対応してください。</p>
+      ${forcedRestRemovals.map(w=>`<div class="deptWarnItem">${escapeHtml(w.emp.name)}：${formatSlashDate(w.dateStr)}の勤務を取消(勤務間隔14時間未満だったため)</div>`).join('')}
     </div>` : '';
 
   const overstaffedSlots = state.overstaffedSlots || [];
@@ -2537,6 +2667,7 @@ function viewShift(){
     ${consecutiveViolationHtml}
     ${duplicateAssignmentHtml}
     ${forcedRemovalHtml}
+    ${forcedRestRemovalHtml}
     ${overstaffedHtml}
     <div class="card">
       <h2><span class="num">③</span>最終確認・手動調整</h2>
