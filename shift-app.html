@@ -1439,10 +1439,11 @@ function nightPersonForDate(dateStr, monthCounts, streak, usedToday){
   const primaryId = (state.monthData.nightRotation||{})[bk];
   const primary = state.employees.find(e=>e.id===primaryId);
   if(primary && isStaffCompatible(primary, dateStr, nSlot) && withinDaysOffLimit(primary) && withinStreak(primary) && withinInterval(primary) && notUsedToday(primary)) return primary;
-  // 主担当が入れない日だけ、他のナイト可能な社員から優先順位(勤務負担が少ない→過去のナイト担当回数が少ない)で選ぶ
+  // 代打選びは「これまでのナイト担当回数が少ない人」を最優先にする(月の勤務日数を先に見ると、
+  // ナイト直後の強制休みで勤務日数が低く見える人に代打が集中し、悪循環になるため)
   const altCandidates = state.employees.filter(e=>e.type==='staff' && e.nightOk && e.id!==primaryId)
     .filter(e=> isStaffCompatible(e, dateStr, nSlot) && withinDaysOffLimit(e) && withinStreak(e) && withinInterval(e) && notUsedToday(e))
-    .sort((a,b)=> (monthCounts[a.id]||0)-(monthCounts[b.id]||0) || nightDutyCountSoFar(a.id, nSlotId)-nightDutyCountSoFar(b.id, nSlotId));
+    .sort((a,b)=> nightDutyCountSoFar(a.id, nSlotId)-nightDutyCountSoFar(b.id, nSlotId) || (monthCounts[a.id]||0)-(monthCounts[b.id]||0));
   return altCandidates[0] || null;
 }
 function addDaysToDateStr(dateStr, n){
@@ -1457,6 +1458,11 @@ function prevDayStartHour(empId, dateStr){
   if(!sh) return null;
   const slotId = Object.keys(sh).find(k=> (sh[k]||[]).includes(empId));
   if(!slotId) return null;
+  // 前日が要出勤(会議など)で強制的に決まった枠だった場合、本人の意思ではないため、
+  // 翌日の前倒し制限の基準にはしない(制約なしとして扱う)
+  const prevStatus = getDayStatus(empId, prevD);
+  const prevSp = prevStatus.specialEntry;
+  if(prevSp && (prevSp.kind||'off')==='required') return null;
   const slot = state.shiftSlots.find(s=>s.id===slotId);
   return slot ? normHour(slot.start) : null;
 }
