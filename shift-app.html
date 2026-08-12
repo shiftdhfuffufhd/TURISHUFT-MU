@@ -1836,6 +1836,94 @@ function breakUpLongRestStreaks(monthCounts, weeklyCounts, monthHours){
   });
   return fixedCount;
 }
+// ===== 第2段階: 月全体を分析して再調整する =====
+// 仮作成後、月全体の勤務日数・時間の偏りを集計し、「多すぎる人」と「少なすぎる人」を
+// 実際に入れ替える(スワップ)ことで、月末へのしわ寄せや特定個人への偏りを減らす。
+// 絶対条件(5連勤・夜勤後2連休・4連勤後2連休・勤務間隔14時間・希望休・勤務可能条件・休み下限)は
+// スワップ後も必ず満たされることを確認してから適用する。必要人数は増減させない(過剰配置しない)。
+function rebalanceMonthWide(monthCounts, weeklyCounts, monthHours){
+  const dates = buildMonthDates(state.month);
+  const staffList = state.employees.filter(e=>e.type==='staff');
+  if(staffList.length<2) return 0;
+  const totalDays = daysInMonth(state.month);
+  let swapCount = 0;
+  const MAX_PASSES = 6;
+
+  // 指定した人をその日その枠に入れても絶対条件を全て満たすかを判定する
+  function canTake(emp, dateStr, slot){
+    if(isWorkingOnDate(emp.id, dateStr)) return false;
+    if(!isStaffCompatible(emp, dateStr, slot)) return false;
+    if(!hasEnoughRestInterval(emp.id, dateStr, slot)) return false;
+    if(consecutiveIfWorking(emp.id, dateStr) > MAX_CONSECUTIVE_DAYS) return false;
+    if(backwardShiftHours(emp.id, dateStr, slot) > MAX_BACKWARD_SHIFT_HOURS) return false;
+    if(emp.maxPerWeek && (weeklyCounts[mondayOf(dateStr)]?.[emp.id]||0) >= emp.maxPerWeek) return false;
+    return true;
+  }
+  function applySwap(outEmp, inEmp, dateStr, slot){
+    const arr = state.monthData.shifts[dateStr][slot.id];
+    const idx = arr.indexOf(outEmp.id);
+    if(idx===-1) return false;
+    arr.splice(idx, 1, inEmp.id);
+    const hrs = slotHoursCalc(slot);
+    const wk = mondayOf(dateStr);
+    monthCounts[outEmp.id]--; monthHours[outEmp.id] -= hrs;
+    monthCounts[inEmp.id] = (monthCounts[inEmp.id]||0)+1; monthHours[inEmp.id] = (monthHours[inEmp.id]||0)+hrs;
+    if(!weeklyCounts[wk]) weeklyCounts[wk] = {};
+    weeklyCounts[wk][outEmp.id] = Math.max(0, (weeklyCounts[wk][outEmp.id]||0)-1);
+    weeklyCounts[wk][inEmp.id] = (weeklyCounts[wk][inEmp.id]||0)+1;
+    return true;
+  }
+  function revertSwap(outEmp, inEmp, dateStr, slot){
+    applySwap(inEmp, outEmp, dateStr, slot);
+  }
+
+  for(let pass=0; pass<MAX_PASSES; pass++){
+    // 勤務日数の多い順・少ない順に並べ、両端の差が2日以内なら十分公平とみなし終了
+    const sorted = staffList.slice().sort((a,b)=> (monthCounts[b.id]||0)-(monthCounts[a.id]||0));
+    const overworked = sorted.filter(e=> (monthCounts[e.id]||0) > 0);
+    const underworked = sorted.slice().reverse();
+    let didSwap = false;
+
+    for(const outEmp of overworked){
+      for(const inEmp of underworked){
+        if(outEmp.id===inEmp.id) continue;
+        const outDays = monthCounts[outEmp.id]||0;
+        const inDays = monthCounts[inEmp.id]||0;
+        // 差が2日以下なら是正の必要なし。スワップで逆転させても意味がないので2日超のみ対象
+        if(outDays - inDays <= 2) continue;
+        // 受け手が休み下限を割らないか(1日増えるため)
+        if(inEmp.monthMinDaysOff && (inDays+1) > (totalDays - inEmp.monthMinDaysOff)) continue;
+
+        for(const dateStr of dates){
+          const daySh = state.monthData.shifts[dateStr];
+          if(!daySh) continue;
+          const slotId = Object.keys(daySh).find(k=> (daySh[k]||[]).includes(outEmp.id));
+          if(!slotId) continue;
+          // 要出勤(会議など)で確定している日は動かさない
+          const outSp = getDayStatus(outEmp.id, dateStr).specialEntry;
+          if(outSp && (outSp.kind||'off')==='required') continue;
+          const slot = state.shiftSlots.find(s=>s.id===slotId);
+          if(!slot) continue;
+          if(slot.id==='night') continue; // ナイトは専用ローテーションで管理しているため対象外
+          if(!canTake(inEmp, dateStr, slot)) continue;
+
+          // 実際に入れ替えてみて、両者とも絶対条件を満たしたままかを検証する
+          if(!applySwap(outEmp, inEmp, dateStr, slot)) continue;
+          const ok = computeConsecutiveViolations().length===0
+            && computeDuplicateAssignments().length===0
+            && !isInNightRecovery(inEmp.id, dateStr, slot)
+            && !needsExtraRestAfterLongStreak(inEmp.id, dateStr);
+          if(ok){ swapCount++; didSwap = true; break; }
+          revertSwap(outEmp, inEmp, dateStr, slot);
+        }
+        if(didSwap) break;
+      }
+      if(didSwap) break;
+    }
+    if(!didSwap) break; // これ以上改善できない
+  }
+  return swapCount;
+}
 // 必要人数を超えて配置されている枠から、不足している枠へ社員を振り分ける(5連勤ルールは例外なし)
 function reallocateSurplusStaff(){
   const dates = buildMonthDates(state.month);
@@ -2015,9 +2103,18 @@ async function autoGenerateStaff(){
     // 希望順位のパス方式で埋める: まず全ての枠で「第1希望」の人だけを対象に埋め、
     // それでも埋まらない枠だけ「第2希望」、さらに「第3希望」…の順に対象を広げる。
     // (枠の処理順で決めると、ある人の第1希望が後回しにされ、別の枠の第2希望として先に取られてしまうことがあるため)
+    // 各パスの中では、その時点で「入れる候補者が少ない枠(希少枠)」から先に確保する。
     const normalSlots = state.shiftSlots.filter(s=>s.id!=='night');
     for(let rankLevel=1; rankLevel<=PREF_LEVELS+1; rankLevel++){
-      normalSlots.forEach(slot=>{
+      // このパスで扱う候補者数を数え、少ない枠から順に処理する(希少枠優先)
+      const orderedSlots = normalSlots.slice().sort((a,b)=>{
+        const countFor = (slot)=> staffList.filter(e=>
+          !usedToday.has(e.id) && isStaffCompatible(e, dateStr, slot)
+          && (rankLevel>PREF_LEVELS || (e.shiftRank[slot.id]||0)===rankLevel)
+        ).length;
+        return countFor(a)-countFor(b);
+      });
+      orderedSlots.forEach(slot=>{
         const need = getRequiredCount(dateStr, slot.id);
         if(need<=0) return;
         const already = (daySh[slot.id]||[]).filter(id=>{ const e=state.employees.find(x=>x.id===id); return e&&e.type==='staff'; });
@@ -2065,6 +2162,10 @@ async function autoGenerateStaff(){
   // 手動で追加する運用を基本とする(状況カードで休みが多い人が分かるようにしている)。
   const filledCount = fillRemainingShortages(monthCounts, weeklyCounts, monthHours);
   const maximizedCount = 0;
+  // ===== 第2段階: 月全体を集計し、勤務日数・時間の偏りを入れ替え(スワップ)で是正する =====
+  // 月初から順に埋めた結果生じる「月末へのしわ寄せ」「特定個人への集中」を減らす。
+  // 必要人数は増減させず、絶対条件を満たす入れ替えのみ適用する。
+  const swapCount = rebalanceMonthWide(monthCounts, weeklyCounts, monthHours);
   // 「2連勤以上5連勤以下」をほぼ必須の制約として、孤立した1日勤務を延長する(必要人数を超える配置は絶対にしない)
   const isolatedFix = fixIsolatedSingleDayStints(monthCounts, weeklyCounts, monthHours);
   // 3連休以上になっている箇所を、可能な範囲で分割する(月末に休みがまとまってしまうのを防ぐ)
@@ -2089,6 +2190,7 @@ async function autoGenerateStaff(){
   const msgBits = [];
   if(filledCount>0) msgBits.push(`不足枠${filledCount}件を充填`);
   if(isolatedFix.fixedCount>0) msgBits.push(`孤立勤務${isolatedFix.fixedCount}件を2連勤に延長`);
+  if(swapCount>0) msgBits.push(`月全体の偏りを${swapCount}件調整`);
   if(restStreakFix>0) msgBits.push(`3連休以上${restStreakFix}件を分割`);
   const baseMsg = msgBits.length ? `社員シフトを仮作成しました(${msgBits.join('・')})` : '社員シフトを仮作成しました';
   toast(warnParts.length ? `${baseMsg}(${warnParts.join('・')}。要確認)` : `${baseMsg}(内容を確認・調整してください)`);
