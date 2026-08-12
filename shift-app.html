@@ -1206,8 +1206,16 @@ function empMonthDays(empId){
 
 // ---------- 判定・候補ロジック ----------
 // 夜勤(ナイト)シフトの最終日の翌2日間は、必ず休みにする(必須ルール・例外なし)
-function isInNightRecovery(empId, dateStr){
+function isInNightRecovery(empId, dateStr, consideringSlot){
   const nSlot = nightSlot(); if(!nSlot) return false;
+  // ナイトそのものを判定している場合、前日もナイトだった(=継続中)なら回復期間の判定は不要。
+  // (5連勤の上限は別途チェックされるので、ここでは継続を妨げないようにする)
+  if(consideringSlot && consideringSlot.id===nSlot.id){
+    const prevD = addDaysToDateStr(dateStr, -1);
+    const prevSh = state.monthData.shifts[prevD];
+    const workedPrevNight = prevSh && prevSh[nSlot.id] && prevSh[nSlot.id].includes(empId);
+    if(workedPrevNight) return false;
+  }
   for(let back=1; back<=2; back++){
     const d = addDaysToDateStr(dateStr, -back);
     const sh = state.monthData.shifts[d];
@@ -1226,7 +1234,7 @@ function isStaffCompatible(staffEmp, dateStr, slot){
   if(!staffEmp.workableDays.includes(dayKey)) return false;
   if(slot.id!=='night' && !staffEmp.workableShifts.includes(slot.id)) return false;
   if(slot.id==='night' && !staffEmp.nightOk) return false;
-  if(isInNightRecovery(staffEmp.id, dateStr)) return false; // 夜勤後2連休は必須
+  if(isInNightRecovery(staffEmp.id, dateStr, slot)) return false; // 夜勤後2連休は必須
   if(needsExtraRestAfterLongStreak(staffEmp.id, dateStr)) return false; // 4連勤以上した直後は最低2日休み必須
   const st = getDayStatus(staffEmp.id, dateStr);
   if(st.offRequested) return false;
@@ -1410,6 +1418,17 @@ function nightDutyCountSoFar(empId, nSlotId){
   });
   return count;
 }
+// dateStrより前で、直近何日前にナイトを担当したか(未担当ならInfinity)。
+// 「合計回数」ではなく「直近いつ担当したか」で判定することで、他の人が挟まらないまま
+// 同じ人がすぐ再登板するのを防ぐ(4人以上の間隔を空けたい、というルールのため)。
+function daysSinceLastNightShift(empId, dateStr, nSlotId){
+  for(let back=1; back<=45; back++){
+    const d = addDaysToDateStr(dateStr, -back);
+    const sh = state.monthData.shifts[d];
+    if(sh && sh[nSlotId] && sh[nSlotId].includes(empId)) return back;
+  }
+  return Infinity;
+}
 function ensureNightRotation(){
   const blocks = nightBlockKeysOfMonth(state.month);
   const nightStaff = state.employees.filter(e=>e.type==='staff' && e.nightOk);
@@ -1439,11 +1458,22 @@ function nightPersonForDate(dateStr, monthCounts, streak, usedToday){
   const primaryId = (state.monthData.nightRotation||{})[bk];
   const primary = state.employees.find(e=>e.id===primaryId);
   if(primary && isStaffCompatible(primary, dateStr, nSlot) && withinDaysOffLimit(primary) && withinStreak(primary) && withinInterval(primary) && notUsedToday(primary)) return primary;
-  // 代打選びは「これまでのナイト担当回数が少ない人」を最優先にする(月の勤務日数を先に見ると、
-  // ナイト直後の強制休みで勤務日数が低く見える人に代打が集中し、悪循環になるため)
+  // 代打選びは、まず「前日または翌日も既にナイトを担当している人(連続化できる人)」を優先し、
+  // その中で「これまでのナイト担当回数が少ない人」を優先する(月の勤務日数を先に見ると、
+  // ナイト直後の強制休みで勤務日数が低く見える人に代打が集中し、悪循環になるため)。
+  // これにより、1〜2日だけの単発ナイトができるだけ発生しないようにする。
+  const nightSh = (d)=> (state.monthData.shifts[d]||{})[nSlotId] || [];
+  const isContinuingStretch = (e)=>{
+    const prevD = addDaysToDateStr(dateStr, -1);
+    const nextD = addDaysToDateStr(dateStr, 1);
+    return nightSh(prevD).includes(e.id) || nightSh(nextD).includes(e.id);
+  };
   const altCandidates = state.employees.filter(e=>e.type==='staff' && e.nightOk && e.id!==primaryId)
     .filter(e=> isStaffCompatible(e, dateStr, nSlot) && withinDaysOffLimit(e) && withinStreak(e) && withinInterval(e) && notUsedToday(e))
-    .sort((a,b)=> nightDutyCountSoFar(a.id, nSlotId)-nightDutyCountSoFar(b.id, nSlotId) || (monthCounts[a.id]||0)-(monthCounts[b.id]||0));
+    .sort((a,b)=>
+      (isContinuingStretch(a)?0:1)-(isContinuingStretch(b)?0:1)
+      || daysSinceLastNightShift(b.id, dateStr, nSlotId)-daysSinceLastNightShift(a.id, dateStr, nSlotId)
+      || (monthCounts[a.id]||0)-(monthCounts[b.id]||0));
   return altCandidates[0] || null;
 }
 function addDaysToDateStr(dateStr, n){
@@ -1927,7 +1957,7 @@ async function autoGenerateStaff(){
       if(!(sp && sp.content && sp.start && sp.end && (sp.kind||'off')==='required')) return;
       const matchSlot = state.shiftSlots.find(slot=> slotFullyCovers(slot, sp.start, sp.end));
       if(!matchSlot) return; // 完全にカバーする枠がない場合は自動配置しない(不足として警告表示・別枠で対応済み)
-      if((streak[e.id]||0) >= MAX_CONSECUTIVE_DAYS || isInNightRecovery(e.id, dateStr) || needsExtraRestAfterLongStreak(e.id, dateStr)){
+      if((streak[e.id]||0) >= MAX_CONSECUTIVE_DAYS || isInNightRecovery(e.id, dateStr, matchSlot) || needsExtraRestAfterLongStreak(e.id, dateStr)){
         requiredConflicts.push({dateStr, emp:e, sp});
         return;
       }
