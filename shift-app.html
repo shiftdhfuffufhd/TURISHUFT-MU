@@ -203,7 +203,7 @@ const DAYS = [
   {key:'thu', label:'木'}, {key:'fri', label:'金'}, {key:'sat', label:'土'}, {key:'sun', label:'日'}
 ];
 const WD_INDEX_TO_KEY = ['sun','mon','tue','wed','thu','fri','sat'];
-const APP_VERSION = 'v65'; // このファイルを更新するたびに、ここの番号を上げてください
+const APP_VERSION = 'v66'; // このファイルを更新するたびに、ここの番号を上げてください
 const DEFAULT_SLOTS = [
   {id:'early', name:'早番', start:'04:00', end:'13:00'},
   {id:'mid',   name:'中番', start:'07:00', end:'16:00'},
@@ -1932,7 +1932,26 @@ function normalizeNightBlockLengths(monthCounts, weeklyCounts, monthHours){
       if(nextAdjacent && tryMergeInto(st, next)){ fixCount++; changed=true; break; }
     }
   }
-  return fixCount;
+  // 「ナイトは3〜5連勤」を絶対条件とするため、どうしても隣に吸収できなかった3日未満のまとまりは、
+  // 無理に残さず取り消す(必要人数を満たせない場合と同じく、不足として正直に表示する)
+  let removedCount = 0;
+  const finalStretches = buildStretches();
+  finalStretches.forEach(st=>{
+    if((st.end - st.start + 1) >= 3) return;
+    for(let idx=st.start; idx<=st.end; idx++){
+      const d = dates[idx];
+      const arr = state.monthData.shifts[d] && state.monthData.shifts[d][nSlotId];
+      if(!arr) continue;
+      const pos = arr.indexOf(st.person);
+      if(pos===-1) continue;
+      arr.splice(pos,1);
+      const hrs = slotHoursCalc(nSlot); const wk = mondayOf(d);
+      monthCounts[st.person]--; monthHours[st.person] -= hrs;
+      if(weeklyCounts[wk]) weeklyCounts[wk][st.person] = Math.max(0, (weeklyCounts[wk][st.person]||0)-1);
+      removedCount++;
+    }
+  });
+  return {fixCount, removedCount};
 }
 function breakUpLongRestStreaks(monthCounts, weeklyCounts, monthHours){
   const dates = buildMonthDates(state.month);
@@ -2311,7 +2330,9 @@ async function autoGenerateStaff(){
   // ※月全体のスワップ調整より先に行う(ナイトのまとまりを確定させてから、
   //   それを踏まえてスワップの間隔チェックを行うため。順序を逆にすると、
   //   スワップ後にナイトが延長されて、既に決まっていた翌々日の配置と衝突することがある)。
-  const nightNormalizeCount = normalizeNightBlockLengths(monthCounts, weeklyCounts, monthHours);
+  const nightNormalizeResult = normalizeNightBlockLengths(monthCounts, weeklyCounts, monthHours);
+  const nightNormalizeCount = nightNormalizeResult.fixCount;
+  const nightRemovedCount = nightNormalizeResult.removedCount;
   // ===== 第2段階: 月全体を集計し、勤務日数・時間の偏りを入れ替え(スワップ)で是正する =====
   // 月初から順に埋めた結果生じる「月末へのしわ寄せ」「特定個人への集中」を減らす。
   // 必要人数は増減させず、絶対条件を満たす入れ替えのみ適用する。
@@ -2348,6 +2369,7 @@ async function autoGenerateStaff(){
   if(isolatedFix.fixedCount>0) msgBits.push(`孤立勤務${isolatedFix.fixedCount}件を2連勤に延長`);
   if(swapCount>0) msgBits.push(`月全体の偏りを${swapCount}件調整`);
   if(nightNormalizeCount>0) msgBits.push(`ナイトの短い断片${nightNormalizeCount}件を統合`);
+  if(nightRemovedCount>0) warnParts.push(`ナイト3連勤未満のため${nightRemovedCount}件取消(不足として表示)`);
   if(restStreakFix>0) msgBits.push(`3連休以上${restStreakFix}件を分割`);
   const baseMsg = msgBits.length ? `社員シフトを仮作成しました(${msgBits.join('・')})` : '社員シフトを仮作成しました';
   toast(warnParts.length ? `${baseMsg}(${warnParts.join('・')}。要確認)` : `${baseMsg}(内容を確認・調整してください)`);
