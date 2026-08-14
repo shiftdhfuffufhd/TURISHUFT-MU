@@ -203,7 +203,7 @@ const DAYS = [
   {key:'thu', label:'木'}, {key:'fri', label:'金'}, {key:'sat', label:'土'}, {key:'sun', label:'日'}
 ];
 const WD_INDEX_TO_KEY = ['sun','mon','tue','wed','thu','fri','sat'];
-const APP_VERSION = 'v66'; // このファイルを更新するたびに、ここの番号を上げてください
+const APP_VERSION = 'v67'; // このファイルを更新するたびに、ここの番号を上げてください
 const DEFAULT_SLOTS = [
   {id:'early', name:'早番', start:'04:00', end:'13:00'},
   {id:'mid',   name:'中番', start:'07:00', end:'16:00'},
@@ -2448,7 +2448,9 @@ function timelineHtml(dateStr){
     });
   });
   if(rows.length===0) return `<div class="empty" style="padding:10px 0;">配置なし</div>`;
-  rows.sort((a,b)=> normHour(a.slot.start)-normHour(b.slot.start));
+  rows.sort((a,b)=>
+    (a.emp.type==='staff'?0:1)-(b.emp.type==='staff'?0:1)
+    || normHour(a.slot.start)-normHour(b.slot.start));
   const ruler = `<div class="tlRuler">${[4,7,10,13,16,19,22,1,4].map(h=>`<span>${h}</span>`).join('')}</div>`;
   const edit = state.timelineEdit;
   const bars = rows.map(r=>{
